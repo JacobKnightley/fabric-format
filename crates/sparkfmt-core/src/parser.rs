@@ -1342,6 +1342,7 @@ fn parse_expression_as_string(lexer: &mut Lexer) -> Result<String, FormatError> 
         }
     }
     
+    // Join without spaces to match existing expression formatting (e.g., "x=1" not "x = 1")
     Ok(parts.join(""))
 }
 
