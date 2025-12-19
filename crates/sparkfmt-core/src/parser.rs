@@ -1600,12 +1600,17 @@ fn parse_group_by_clause(lexer: &mut Lexer) -> Result<GroupByClause, FormatError
                         }
                         lexer.expect_symbol(")")?;
                         
-                        // For now, combine the set_items into a single parenthesized expression
+                        // Create a representation for the grouping set
                         if set_items.len() == 1 {
                             args.push(Expression::Parenthesized(Box::new(set_items.into_iter().next().unwrap())));
                         } else {
-                            // Multiple items - create a raw token representation
-                            args.push(Expression::Parenthesized(Box::new(set_items.into_iter().next().unwrap())));
+                            // Multiple items - create a FunctionCall with empty name to represent the tuple
+                            // This is a bit of a hack but works for formatting purposes
+                            let tuple_expr = Expression::FunctionCall {
+                                name: "".to_string(), // Empty name means it's just a comma-separated list
+                                args: set_items,
+                            };
+                            args.push(Expression::Parenthesized(Box::new(tuple_expr)));
                         }
                     }
                     

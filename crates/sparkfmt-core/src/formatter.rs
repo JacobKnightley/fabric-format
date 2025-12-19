@@ -204,21 +204,31 @@ fn format_expression(expr: &Expression, output: &mut String) {
             output.push_str(".*");
         }
         Expression::FunctionCall { name, args } => {
-            // Built-in functions are UPPERCASE, user-defined functions preserve casing
-            let formatted_name = if functions::is_builtin_function(name) {
-                name.to_uppercase()
-            } else {
-                name.clone()
-            };
-            output.push_str(&formatted_name);
-            output.push('(');
-            for (i, arg) in args.iter().enumerate() {
-                if i > 0 {
-                    output.push(',');
+            // Empty name means it's just a comma-separated list (used in GROUPING SETS)
+            if name.is_empty() {
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        output.push(',');
+                    }
+                    format_expression(arg, output);
                 }
-                format_expression(arg, output);
+            } else {
+                // Built-in functions are UPPERCASE, user-defined functions preserve casing
+                let formatted_name = if functions::is_builtin_function(name) {
+                    name.to_uppercase()
+                } else {
+                    name.clone()
+                };
+                output.push_str(&formatted_name);
+                output.push('(');
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        output.push(',');
+                    }
+                    format_expression(arg, output);
+                }
+                output.push(')');
             }
-            output.push(')');
         }
         Expression::BinaryOp { left, op, right } => {
             format_expression(left, output);
