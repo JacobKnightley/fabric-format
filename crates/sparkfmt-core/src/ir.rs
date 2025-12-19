@@ -288,15 +288,21 @@ pub struct TableRef {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Join {
     pub join_type: JoinType,
+    pub natural: bool,
     pub table: TableRef,
     pub on_conditions: Vec<Condition>,
+    pub using_columns: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum JoinType {
     Inner,
     Left,
+    LeftSemi,
+    LeftAnti,
     Right,
+    RightSemi,
+    RightAnti,
     Full,
     Cross,
 }

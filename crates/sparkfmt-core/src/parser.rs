@@ -262,6 +262,11 @@ impl Lexer {
         Ok(matches!(token, ParserToken::Word(w) if w.to_uppercase() == keyword.to_uppercase()))
     }
     
+    fn is_symbol(&mut self, symbol: &str) -> Result<bool, FormatError> {
+        let token = self.peek()?;
+        Ok(matches!(token, ParserToken::Symbol(s) if s == symbol))
+    }
+    
     fn parse_identifier(&mut self) -> Result<String, FormatError> {
         let token = self.next()?;
         match token {
@@ -1097,28 +1102,56 @@ fn parse_from_clause(lexer: &mut Lexer) -> Result<FromClause, FormatError> {
 
 fn is_join_keyword(lexer: &mut Lexer) -> Result<bool, FormatError> {
     let token = lexer.peek()?;
-    Ok(matches!(token, ParserToken::Word(w) if matches!(w.to_uppercase().as_str(), "INNER" | "LEFT" | "RIGHT" | "FULL" | "CROSS" | "JOIN")))
+    Ok(matches!(token, ParserToken::Word(w) if matches!(w.to_uppercase().as_str(), "NATURAL" | "INNER" | "LEFT" | "RIGHT" | "FULL" | "CROSS" | "JOIN")))
 }
 
 fn parse_join(lexer: &mut Lexer) -> Result<Join, FormatError> {
+    // Check for NATURAL modifier first
+    let natural = if lexer.is_keyword("NATURAL")? {
+        lexer.expect_keyword("NATURAL")?;
+        true
+    } else {
+        false
+    };
+    
     let join_type = if lexer.is_keyword("INNER")? {
         lexer.expect_keyword("INNER")?;
         lexer.expect_keyword("JOIN")?;
         JoinType::Inner
     } else if lexer.is_keyword("LEFT")? {
         lexer.expect_keyword("LEFT")?;
-        if lexer.is_keyword("OUTER")? {
-            lexer.expect_keyword("OUTER")?;
+        if lexer.is_keyword("SEMI")? {
+            lexer.expect_keyword("SEMI")?;
+            lexer.expect_keyword("JOIN")?;
+            JoinType::LeftSemi
+        } else if lexer.is_keyword("ANTI")? {
+            lexer.expect_keyword("ANTI")?;
+            lexer.expect_keyword("JOIN")?;
+            JoinType::LeftAnti
+        } else {
+            if lexer.is_keyword("OUTER")? {
+                lexer.expect_keyword("OUTER")?;
+            }
+            lexer.expect_keyword("JOIN")?;
+            JoinType::Left
         }
-        lexer.expect_keyword("JOIN")?;
-        JoinType::Left
     } else if lexer.is_keyword("RIGHT")? {
         lexer.expect_keyword("RIGHT")?;
-        if lexer.is_keyword("OUTER")? {
-            lexer.expect_keyword("OUTER")?;
+        if lexer.is_keyword("SEMI")? {
+            lexer.expect_keyword("SEMI")?;
+            lexer.expect_keyword("JOIN")?;
+            JoinType::RightSemi
+        } else if lexer.is_keyword("ANTI")? {
+            lexer.expect_keyword("ANTI")?;
+            lexer.expect_keyword("JOIN")?;
+            JoinType::RightAnti
+        } else {
+            if lexer.is_keyword("OUTER")? {
+                lexer.expect_keyword("OUTER")?;
+            }
+            lexer.expect_keyword("JOIN")?;
+            JoinType::Right
         }
-        lexer.expect_keyword("JOIN")?;
-        JoinType::Right
     } else if lexer.is_keyword("FULL")? {
         lexer.expect_keyword("FULL")?;
         if lexer.is_keyword("OUTER")? {
@@ -1138,16 +1171,35 @@ fn parse_join(lexer: &mut Lexer) -> Result<Join, FormatError> {
     let table = parse_table_ref(lexer)?;
     
     let mut on_conditions = Vec::new();
+    let mut using_columns = Vec::new();
     
     if lexer.is_keyword("ON")? {
         lexer.expect_keyword("ON")?;
         on_conditions = parse_conditions(lexer)?;
+    } else if lexer.is_keyword("USING")? {
+        lexer.expect_keyword("USING")?;
+        lexer.expect_symbol("(")?;
+        
+        // Parse column list
+        loop {
+            using_columns.push(parse_identifier(lexer)?);
+            
+            if lexer.is_symbol(",")? {
+                lexer.expect_symbol(",")?;
+            } else {
+                break;
+            }
+        }
+        
+        lexer.expect_symbol(")")?;
     }
     
     Ok(Join {
         join_type,
+        natural,
         table,
         on_conditions,
+        using_columns,
     })
 }
 
@@ -1164,6 +1216,7 @@ fn parse_table_ref(lexer: &mut Lexer) -> Result<TableRef, FormatError> {
             ParserToken::Word(_) => {
                 // Make sure it's not a keyword
                 if !is_join_keyword(lexer)? && !lexer.is_keyword("ON")? && 
+                   !lexer.is_keyword("USING")? &&
                    !lexer.is_keyword("WHERE")? && 
                    !lexer.is_keyword("GROUP")? && !lexer.is_keyword("HAVING")? &&
                    !lexer.is_keyword("ORDER")? && !lexer.is_keyword("LIMIT")? &&

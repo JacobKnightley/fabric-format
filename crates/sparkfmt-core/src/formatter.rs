@@ -422,10 +422,25 @@ fn format_from_clause(from: &FromClause, output: &mut String, indent: usize) {
 
 fn format_join(join: &Join, output: &mut String, _indent: usize) {
     // JOIN keywords start at column 0
+    if join.natural {
+        output.push_str("NATURAL ");
+    }
+    
     match join.join_type {
-        JoinType::Inner => output.push_str("INNER JOIN "),
+        JoinType::Inner => {
+            // Only output INNER if it's not natural, otherwise just JOIN
+            if !join.natural {
+                output.push_str("INNER JOIN ");
+            } else {
+                output.push_str("JOIN ");
+            }
+        },
         JoinType::Left => output.push_str("LEFT JOIN "),
+        JoinType::LeftSemi => output.push_str("LEFT SEMI JOIN "),
+        JoinType::LeftAnti => output.push_str("LEFT ANTI JOIN "),
         JoinType::Right => output.push_str("RIGHT JOIN "),
+        JoinType::RightSemi => output.push_str("RIGHT SEMI JOIN "),
+        JoinType::RightAnti => output.push_str("RIGHT ANTI JOIN "),
         JoinType::Full => output.push_str("FULL JOIN "),
         JoinType::Cross => output.push_str("CROSS JOIN "),
     }
@@ -436,6 +451,20 @@ fn format_join(join: &Join, output: &mut String, _indent: usize) {
     if let Some(ref alias) = join.table.alias {
         output.push(' ');
         output.push_str(alias);
+    }
+    
+    // Format USING clause
+    if !join.using_columns.is_empty() {
+        output.push('\n');
+        output.push_str(&" ".repeat(BASE_INDENT));
+        output.push_str("USING (");
+        for (i, col) in join.using_columns.iter().enumerate() {
+            if i > 0 {
+                output.push(',');
+            }
+            output.push_str(col);
+        }
+        output.push(')');
     }
     
     // Format ON conditions
