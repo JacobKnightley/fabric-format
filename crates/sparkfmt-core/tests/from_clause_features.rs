@@ -38,9 +38,8 @@ fn test_tablesample_rows() {
 #[test]
 fn test_from_subquery() {
     let input = "select x from (select y as x from s) sub";
-    // Note: This is the actual output with current indentation approach
-    // The nested SELECT follows standard formatting
-    let expected = "SELECT\n     x\nFROM (\n    SELECT\n     y AS x\nFROM s\n) sub";
+    // Subquery content should be indented 4 spaces from the opening paren
+    let expected = "SELECT\n     x\nFROM (\n    SELECT\n         y AS x\n    FROM s\n) sub";
     assert_eq!(format_sql(input).unwrap(), expected);
 }
 
