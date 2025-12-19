@@ -40,12 +40,24 @@ fn format_select_query(query: &SelectQuery, output: &mut String, indent: usize) 
         format_with_clause(with_clause, output, indent);
     }
     
+    // Format leading comments
+    for comment in &query.leading_comments {
+        format_comment(comment, output, indent);
+    }
+    
     // SELECT keyword
     if query.distinct {
         output.push_str("SELECT DISTINCT");
     } else {
         output.push_str("SELECT");
     }
+    
+    // Format hint comment immediately after SELECT
+    if let Some(ref hint) = query.hint_comment {
+        output.push(' ');
+        output.push_str(hint);
+    }
+    
     output.push('\n');
     
     // Select list (comma-first style)
@@ -87,6 +99,19 @@ fn format_select_query(query: &SelectQuery, output: &mut String, indent: usize) 
     }
 }
 
+fn format_comment(comment: &Comment, output: &mut String, indent: usize) {
+    match comment.attachment {
+        CommentAttachment::TrailingInline => {
+            // Will be handled inline with the code
+        }
+        CommentAttachment::TrailingOwnLine | CommentAttachment::Leading => {
+            output.push_str(&" ".repeat(indent));
+            output.push_str(&comment.text);
+            output.push('\n');
+        }
+    }
+}
+
 fn format_with_clause(with_clause: &WithClause, output: &mut String, indent: usize) {
     output.push_str("WITH ");
     
@@ -125,6 +150,14 @@ fn format_select_list(items: &[SelectItem], output: &mut String, _indent: usize)
         if let Some(ref alias) = item.alias {
             output.push_str(" AS ");
             output.push_str(alias);
+        }
+        
+        // Format trailing inline comment
+        if let Some(ref comment) = item.trailing_comment {
+            if matches!(comment.attachment, CommentAttachment::TrailingInline) {
+                output.push(' ');
+                output.push_str(&comment.text);
+            }
         }
         
         output.push('\n');

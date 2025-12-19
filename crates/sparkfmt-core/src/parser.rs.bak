@@ -13,6 +13,11 @@ lazy_static! {
 pub fn parse(input: &str) -> Result<Statement, FormatError> {
     let mut lexer = Lexer::new(input);
     let statement = parse_statement(&mut lexer)?;
+    
+    // TODO: Anchor comments to statement nodes
+    // For now, comments are extracted but not yet anchored/printed
+    // This is a foundation for the full comment anchoring system
+    
     Ok(statement)
 }
 
@@ -22,32 +27,15 @@ enum Token {
     Symbol(String),
     Number(String),
     StringLiteral(String),
+    HintComment(String), // Query hint: /*+ ... */
     Eof,
-}
-
-#[derive(Debug, Clone)]
-struct CommentInfo {
-    text: String,
-    line: usize,
-    col: usize,
-    is_line_comment: bool,
-    is_hint: bool,
-}
-
-#[derive(Debug, Clone)]
-struct TokenInfo {
-    line: usize,
-    col: usize,
 }
 
 struct Lexer {
     input: String,
     pos: usize,
-    line: usize,
-    col: usize,
     peeked: Option<Token>,
-    comments: Vec<CommentInfo>,
-    last_token_info: Option<TokenInfo>,
+    comments: Vec<(String, bool)>, // (text, is_line_comment)
 }
 
 impl Lexer {
@@ -55,59 +43,24 @@ impl Lexer {
         Self {
             input: input.to_string(),
             pos: 0,
-            line: 1,
-            col: 1,
             peeked: None,
             comments: Vec::new(),
-            last_token_info: None,
-        }
-    }
-
-    fn advance_char(&mut self) {
-        if self.pos < self.input.len() {
-            if self.input.as_bytes()[self.pos] == b'\n' {
-                self.line += 1;
-                self.col = 1;
-            } else {
-                self.col += 1;
-            }
-            self.pos += 1;
-        }
-    }
-
-    fn advance_by(&mut self, n: usize) {
-        for _ in 0..n {
-            self.advance_char();
         }
     }
 
     fn skip_whitespace(&mut self) {
         while self.pos < self.input.len() {
             let remaining = &self.input[self.pos..];
-            let start_line = self.line;
-            let start_col = self.col;
             
             // Collect single-line comments
             if remaining.starts_with("--") {
                 if let Some(newline_pos) = remaining.find('\n') {
                     let comment_text = remaining[..newline_pos].to_string();
-                    self.comments.push(CommentInfo {
-                        text: comment_text,
-                        line: start_line,
-                        col: start_col,
-                        is_line_comment: true,
-                        is_hint: false,
-                    });
-                    self.advance_by(newline_pos + 1);
+                    self.comments.push((comment_text, true));
+                    self.pos += newline_pos + 1;
                 } else {
                     let comment_text = remaining.to_string();
-                    self.comments.push(CommentInfo {
-                        text: comment_text,
-                        line: start_line,
-                        col: start_col,
-                        is_line_comment: true,
-                        is_hint: false,
-                    });
+                    self.comments.push((comment_text, true));
                     self.pos = self.input.len();
                 }
                 continue;
@@ -117,23 +70,11 @@ impl Lexer {
             if remaining.starts_with("/*+") {
                 if let Some(end_pos) = remaining.find("*/") {
                     let comment_text = remaining[..end_pos + 2].to_string();
-                    self.comments.push(CommentInfo {
-                        text: comment_text,
-                        line: start_line,
-                        col: start_col,
-                        is_line_comment: false,
-                        is_hint: true,
-                    });
-                    self.advance_by(end_pos + 2);
+                    self.comments.push((comment_text, false)); // Store as comment for now
+                    self.pos += end_pos + 2;
                 } else {
                     let comment_text = remaining.to_string();
-                    self.comments.push(CommentInfo {
-                        text: comment_text,
-                        line: start_line,
-                        col: start_col,
-                        is_line_comment: false,
-                        is_hint: true,
-                    });
+                    self.comments.push((comment_text, false));
                     self.pos = self.input.len();
                 }
                 continue;
@@ -143,23 +84,11 @@ impl Lexer {
             if remaining.starts_with("/*") {
                 if let Some(end_pos) = remaining.find("*/") {
                     let comment_text = remaining[..end_pos + 2].to_string();
-                    self.comments.push(CommentInfo {
-                        text: comment_text,
-                        line: start_line,
-                        col: start_col,
-                        is_line_comment: false,
-                        is_hint: false,
-                    });
-                    self.advance_by(end_pos + 2);
+                    self.comments.push((comment_text, false));
+                    self.pos += end_pos + 2;
                 } else {
                     let comment_text = remaining.to_string();
-                    self.comments.push(CommentInfo {
-                        text: comment_text,
-                        line: start_line,
-                        col: start_col,
-                        is_line_comment: false,
-                        is_hint: false,
-                    });
+                    self.comments.push((comment_text, false));
                     self.pos = self.input.len();
                 }
                 continue;
@@ -167,7 +96,7 @@ impl Lexer {
             
             // Skip whitespace
             if let Some(m) = WHITESPACE.find(remaining) {
-                self.advance_by(m.end());
+                self.pos += m.end();
                 continue;
             }
             
@@ -195,10 +124,6 @@ impl Lexer {
     fn next_token(&mut self) -> Result<Token, FormatError> {
         self.skip_whitespace();
         
-        // Record token position
-        let token_line = self.line;
-        let token_col = self.col;
-        
         if self.pos >= self.input.len() {
             return Ok(Token::Eof);
         }
@@ -208,32 +133,28 @@ impl Lexer {
         // Try string literal
         if let Some(m) = STRING_LITERAL.find(remaining) {
             let token = Token::StringLiteral(m.as_str().to_string());
-            self.advance_by(m.end());
-            self.last_token_info = Some(TokenInfo { line: token_line, col: token_col });
+            self.pos += m.end();
             return Ok(token);
         }
         
         // Try number
         if let Some(m) = NUMBER.find(remaining) {
             let token = Token::Number(m.as_str().to_string());
-            self.advance_by(m.end());
-            self.last_token_info = Some(TokenInfo { line: token_line, col: token_col });
+            self.pos += m.end();
             return Ok(token);
         }
         
         // Try identifier or keyword - store with original casing
         if let Some(m) = IDENTIFIER.find(remaining) {
             let text = m.as_str().to_string();
-            self.advance_by(m.end());
-            self.last_token_info = Some(TokenInfo { line: token_line, col: token_col });
+            self.pos += m.end();
             return Ok(Token::Word(text)); // Preserve original casing
         }
         
         // Try multi-char operators first (longest match first)
         for symbol in &["<=", ">=", "<>", "!=", "||"] {
             if remaining.starts_with(symbol) {
-                self.advance_by(symbol.len());
-                self.last_token_info = Some(TokenInfo { line: token_line, col: token_col });
+                self.pos += symbol.len();
                 return Ok(Token::Symbol(symbol.to_string()));
             }
         }
@@ -241,8 +162,7 @@ impl Lexer {
         // Try single-char symbols
         for symbol in &["(", ")", ",", ".", "*", "=", "<", ">", "!", "+", "-", "/", "|"] {
             if remaining.starts_with(symbol) {
-                self.advance_by(symbol.len());
-                self.last_token_info = Some(TokenInfo { line: token_line, col: token_col });
+                self.pos += symbol.len();
                 return Ok(Token::Symbol(symbol.to_string()));
             }
         }
@@ -345,19 +265,6 @@ fn parse_with_clause(lexer: &mut Lexer) -> Result<WithClause, FormatError> {
 fn parse_select_query(lexer: &mut Lexer, with_clause: Option<WithClause>) -> Result<SelectQuery, FormatError> {
     lexer.expect_keyword("SELECT")?;
     
-    // Collect any leading comments that appeared before SELECT
-    let mut leading_comments = Vec::new();
-    for comment in &lexer.comments {
-        if !comment.is_hint {
-            leading_comments.push(Comment {
-                text: comment.text.clone(),
-                is_line_comment: comment.is_line_comment,
-                attachment: CommentAttachment::Leading,
-            });
-        }
-    }
-    lexer.comments.clear();
-    
     let distinct = if lexer.is_keyword("DISTINCT")? {
         lexer.expect_keyword("DISTINCT")?;
         true
@@ -365,17 +272,7 @@ fn parse_select_query(lexer: &mut Lexer, with_clause: Option<WithClause>) -> Res
         false
     };
     
-    // NOW check for hint comment - it appears after SELECT but before the select list
-    // When we peek/parse the next token, any hint will be collected
-    let select_list = parse_select_list_with_comments(lexer)?;
-    
-    // Extract hint comment if any was collected
-    let hint_comment = lexer.comments.iter()
-        .find(|c| c.is_hint)
-        .map(|c| format_hint_comment(&c.text));
-    
-    // Clear all comments after extracting hint
-    lexer.comments.clear();
+    let select_list = parse_select_list(lexer)?;
     
     let from = if lexer.is_keyword("FROM")? {
         Some(parse_from_clause(lexer)?)
@@ -423,53 +320,10 @@ fn parse_select_query(lexer: &mut Lexer, with_clause: Option<WithClause>) -> Res
         having,
         order_by,
         limit,
-        leading_comments,
-        hint_comment,
     })
 }
 
-fn format_hint_comment(hint_text: &str) -> String {
-    use crate::hints;
-    
-    // Extract content between /*+ and */
-    let content = hint_text.trim_start_matches("/*+").trim_end_matches("*/").trim();
-    
-    // Split by comma to handle multiple hints
-    let hints: Vec<&str> = content.split(',').collect();
-    let mut formatted_hints = Vec::new();
-    
-    for hint in hints {
-        let hint = hint.trim();
-        // Extract hint name (before parenthesis or end of string)
-        if let Some(paren_pos) = hint.find('(') {
-            let hint_name = hint[..paren_pos].trim();
-            let args = &hint[paren_pos..];
-            
-            // Uppercase hint name if it's a known hint
-            let formatted_name = if hints::is_hint(hint_name) {
-                hint_name.to_uppercase()
-            } else {
-                hint_name.to_string()
-            };
-            
-            // Preserve argument casing, but remove spaces after commas
-            let formatted_args = args.replace(", ", ",").replace(" ,", ",");
-            formatted_hints.push(format!("{}{}", formatted_name, formatted_args));
-        } else {
-            // No arguments, just uppercase the hint name
-            let formatted_name = if hints::is_hint(hint) {
-                hint.to_uppercase()
-            } else {
-                hint.to_string()
-            };
-            formatted_hints.push(formatted_name);
-        }
-    }
-    
-    format!("/*+ {} */", formatted_hints.join(","))
-}
-
-fn parse_select_list_with_comments(lexer: &mut Lexer) -> Result<Vec<SelectItem>, FormatError> {
+fn parse_select_list(lexer: &mut Lexer) -> Result<Vec<SelectItem>, FormatError> {
     let mut items = Vec::new();
     
     loop {
@@ -498,45 +352,18 @@ fn parse_select_list_with_comments(lexer: &mut Lexer) -> Result<Vec<SelectItem>,
             }
         };
         
-        // Check for comma - this will trigger skip_whitespace which collects trailing comments
+        items.push(SelectItem { expr, alias });
+        
+        // Check for comma
         let token = lexer.peek()?;
-        let has_comma = matches!(token, Token::Symbol(s) if s == ",");
-        
-        // Now check for trailing inline comment after we've peeked (which calls skip_whitespace)
-        let trailing_comment = extract_next_trailing_comment(lexer);
-        
-        items.push(SelectItem { 
-            expr, 
-            alias,
-            trailing_comment,
-        });
-        
-        if has_comma {
-            lexer.next()?; // consume the comma
+        if matches!(token, Token::Symbol(s) if s == ",") {
+            lexer.next()?;
         } else {
             break;
         }
     }
     
     Ok(items)
-}
-
-fn extract_next_trailing_comment(lexer: &mut Lexer) -> Option<Comment> {
-    // Check if there's a comment that was just collected
-    if let Some(ref last_token) = lexer.last_token_info {
-        // Find and remove the first comment that's on the same line as the last token
-        if let Some(idx) = lexer.comments.iter().position(|c| {
-            c.is_line_comment && c.line == last_token.line && c.col > last_token.col
-        }) {
-            let comment = lexer.comments.remove(idx);
-            return Some(Comment {
-                text: comment.text,
-                is_line_comment: true,
-                attachment: CommentAttachment::TrailingInline,
-            });
-        }
-    }
-    None
 }
 
 fn parse_expression(lexer: &mut Lexer) -> Result<Expression, FormatError> {

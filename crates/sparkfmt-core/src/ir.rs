@@ -5,6 +5,24 @@ pub enum Statement {
     SetOperation(SetOperation),
 }
 
+/// Comment with anchoring information
+#[derive(Debug, Clone, PartialEq)]
+pub struct Comment {
+    pub text: String,
+    pub is_line_comment: bool,
+    pub attachment: CommentAttachment,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CommentAttachment {
+    /// Line comment on same line as code
+    TrailingInline,
+    /// Comment on own line immediately above
+    TrailingOwnLine,
+    /// Comment on own line immediately before
+    Leading,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SetOperation {
     pub left: Box<SelectQuery>,
@@ -29,6 +47,8 @@ pub struct SelectQuery {
     pub having: Option<HavingClause>,
     pub order_by: Option<OrderByClause>,
     pub limit: Option<LimitClause>,
+    pub leading_comments: Vec<Comment>,
+    pub hint_comment: Option<String>, // Query hint: /*+ ... */
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -46,6 +66,7 @@ pub struct Cte {
 pub struct SelectItem {
     pub expr: Expression,
     pub alias: Option<String>,
+    pub trailing_comment: Option<Comment>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
