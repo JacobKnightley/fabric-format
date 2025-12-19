@@ -82,7 +82,24 @@ LIMIT 10
 
 ## Usage
 
-### Rust
+### Command-Line Tool (Recommended)
+
+Format SQL files from the command line:
+
+```bash
+# Format a file and print to stdout
+./format-sql.sh query.sql
+
+# Format and save to a new file
+./format-sql.sh query.sql formatted.sql
+
+# Format from stdin
+cat query.sql | ./format-sql.sh -
+```
+
+See [FORMATTING_GUIDE.md](FORMATTING_GUIDE.md) for complete documentation and examples.
+
+### Rust Library
 
 ```rust
 use sparkfmt_core::format_sql;
