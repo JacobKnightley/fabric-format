@@ -1,6 +1,5 @@
 use crate::error::FormatError;
 use crate::ir::*;
-use crate::keywords;
 use regex::Regex;
 use lazy_static::lazy_static;
 
@@ -24,11 +23,11 @@ pub fn parse(input: &str) -> Result<Statement, FormatError> {
 
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
-    Keyword(String),
-    Identifier(String),
+    Word(String), // Unified token for keywords and identifiers (preserves original casing)
     Symbol(String),
     Number(String),
     StringLiteral(String),
+    HintComment(String), // Query hint: /*+ ... */
     Eof,
 }
 
@@ -67,7 +66,21 @@ impl Lexer {
                 continue;
             }
             
-            // Collect multi-line comments
+            // Collect hint comments (/*+ ... */)
+            if remaining.starts_with("/*+") {
+                if let Some(end_pos) = remaining.find("*/") {
+                    let comment_text = remaining[..end_pos + 2].to_string();
+                    self.comments.push((comment_text, false)); // Store as comment for now
+                    self.pos += end_pos + 2;
+                } else {
+                    let comment_text = remaining.to_string();
+                    self.comments.push((comment_text, false));
+                    self.pos = self.input.len();
+                }
+                continue;
+            }
+            
+            // Collect multi-line comments (regular /* ... */)
             if remaining.starts_with("/*") {
                 if let Some(end_pos) = remaining.find("*/") {
                     let comment_text = remaining[..end_pos + 2].to_string();
@@ -131,18 +144,11 @@ impl Lexer {
             return Ok(token);
         }
         
-        // Try identifier or keyword
+        // Try identifier or keyword - store with original casing
         if let Some(m) = IDENTIFIER.find(remaining) {
             let text = m.as_str().to_string();
             self.pos += m.end();
-            
-            // Check if it's a keyword
-            let upper = text.to_uppercase();
-            if keywords::is_keyword(&upper) {
-                return Ok(Token::Keyword(upper));
-            }
-            
-            return Ok(Token::Identifier(text));
+            return Ok(Token::Word(text)); // Preserve original casing
         }
         
         // Try multi-char operators first (longest match first)
@@ -167,14 +173,22 @@ impl Lexer {
     fn expect_keyword(&mut self, keyword: &str) -> Result<(), FormatError> {
         let token = self.next()?;
         match token {
-            Token::Keyword(k) if k.to_uppercase() == keyword.to_uppercase() => Ok(()),
+            Token::Word(w) if w.to_uppercase() == keyword.to_uppercase() => Ok(()),
             _ => Err(FormatError::new(format!("Expected keyword {}, got {:?}", keyword, token))),
         }
     }
 
     fn is_keyword(&mut self, keyword: &str) -> Result<bool, FormatError> {
         let token = self.peek()?;
-        Ok(matches!(token, Token::Keyword(k) if k.to_uppercase() == keyword.to_uppercase()))
+        Ok(matches!(token, Token::Word(w) if w.to_uppercase() == keyword.to_uppercase()))
+    }
+    
+    fn parse_identifier(&mut self) -> Result<String, FormatError> {
+        let token = self.next()?;
+        match token {
+            Token::Word(w) => Ok(w), // Return original casing
+            _ => Err(FormatError::new(format!("Expected identifier, got {:?}", token))),
+        }
     }
 
     fn expect_symbol(&mut self, symbol: &str) -> Result<(), FormatError> {
@@ -318,18 +332,18 @@ fn parse_select_list(lexer: &mut Lexer) -> Result<Vec<SelectItem>, FormatError> 
         // Check for AS alias
         let alias = if lexer.is_keyword("AS")? {
             lexer.expect_keyword("AS")?;
-            Some(parse_identifier(lexer)?)
+            Some(lexer.parse_identifier()?)
         } else {
             // Check for implicit alias (identifier after expression)
             let token = lexer.peek()?;
             match token {
-                Token::Identifier(_) => {
+                Token::Word(_) => {
                     // Only if it's not a keyword or comma
                     if !lexer.is_keyword("FROM")? && !lexer.is_keyword("WHERE")? && 
                        !lexer.is_keyword("GROUP")? && !lexer.is_keyword("ORDER")? && 
                        !lexer.is_keyword("LIMIT")? && !lexer.is_keyword("HAVING")? &&
                        !lexer.is_keyword("UNION")? {
-                        Some(parse_identifier(lexer)?)
+                        Some(lexer.parse_identifier()?)
                     } else {
                         None
                     }
@@ -478,8 +492,8 @@ fn parse_primary_expression(lexer: &mut Lexer) -> Result<Expression, FormatError
             lexer.next()?;
             Ok(Expression::Star)
         }
-        Token::Identifier(_) => {
-            let name = parse_identifier(lexer)?;
+        Token::Word(_) => {
+            let name = lexer.parse_identifier()?;
             
             // Check for function call or qualified identifier
             let token = lexer.peek()?;
@@ -528,11 +542,7 @@ fn parse_primary_expression(lexer: &mut Lexer) -> Result<Expression, FormatError
 }
 
 fn parse_identifier(lexer: &mut Lexer) -> Result<String, FormatError> {
-    let token = lexer.next()?;
-    match token {
-        Token::Identifier(id) => Ok(id),
-        _ => Err(FormatError::new(format!("Expected identifier, got {:?}", token))),
-    }
+    lexer.parse_identifier()
 }
 
 fn parse_from_clause(lexer: &mut Lexer) -> Result<FromClause, FormatError> {
@@ -551,7 +561,7 @@ fn parse_from_clause(lexer: &mut Lexer) -> Result<FromClause, FormatError> {
 
 fn is_join_keyword(lexer: &mut Lexer) -> Result<bool, FormatError> {
     let token = lexer.peek()?;
-    Ok(matches!(token, Token::Keyword(k) if matches!(k.as_str(), "INNER" | "LEFT" | "RIGHT" | "FULL" | "CROSS" | "JOIN")))
+    Ok(matches!(token, Token::Word(w) if matches!(w.to_uppercase().as_str(), "INNER" | "LEFT" | "RIGHT" | "FULL" | "CROSS" | "JOIN")))
 }
 
 fn parse_join(lexer: &mut Lexer) -> Result<Join, FormatError> {
@@ -610,18 +620,19 @@ fn parse_table_ref(lexer: &mut Lexer) -> Result<TableRef, FormatError> {
     
     let alias = if lexer.is_keyword("AS")? {
         lexer.expect_keyword("AS")?;
-        Some(parse_identifier(lexer)?)
+        Some(lexer.parse_identifier()?)
     } else {
         // Check for implicit alias
         let token = lexer.peek()?;
         match token {
-            Token::Identifier(_) => {
+            Token::Word(_) => {
                 // Make sure it's not a keyword
-                if !is_join_keyword(lexer)? && !lexer.is_keyword("WHERE")? && 
+                if !is_join_keyword(lexer)? && !lexer.is_keyword("ON")? && 
+                   !lexer.is_keyword("WHERE")? && 
                    !lexer.is_keyword("GROUP")? && !lexer.is_keyword("HAVING")? &&
                    !lexer.is_keyword("ORDER")? && !lexer.is_keyword("LIMIT")? &&
                    !lexer.is_keyword("UNION")? {
-                    Some(parse_identifier(lexer)?)
+                    Some(lexer.parse_identifier()?)
                 } else {
                     None
                 }
