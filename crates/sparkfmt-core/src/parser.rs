@@ -87,7 +87,7 @@ impl Lexer {
             let start_line = self.line;
             let start_col = self.col;
             
-            // Collect single-line comments
+            // Collect single-line comments BUT DON'T CONTINUE - let them be trailing
             if remaining.starts_with("--") {
                 if let Some(newline_pos) = remaining.find('\n') {
                     let comment_text = remaining[..newline_pos].to_string();
@@ -99,6 +99,8 @@ impl Lexer {
                         is_hint: false,
                     });
                     self.advance_by(newline_pos + 1);
+                    // STOP here - don't continue skipping on the next line
+                    break;
                 } else {
                     let comment_text = remaining.to_string();
                     self.comments.push(CommentInfo {
@@ -109,8 +111,8 @@ impl Lexer {
                         is_hint: false,
                     });
                     self.pos = self.input.len();
+                    break;
                 }
-                continue;
             }
             
             // Collect hint comments (/*+ ... */)
@@ -473,6 +475,9 @@ fn parse_select_list_with_comments(lexer: &mut Lexer) -> Result<Vec<SelectItem>,
     let mut items = Vec::new();
     
     loop {
+        // Save line BEFORE parsing expression (this is where the expression starts)
+        let start_line = lexer.line;
+        
         let expr = parse_expression(lexer)?;
         
         // Check for AS alias
@@ -498,12 +503,15 @@ fn parse_select_list_with_comments(lexer: &mut Lexer) -> Result<Vec<SelectItem>,
             }
         };
         
+        // Use the start_line as the anchor for trailing comments
+        let anchor_line = start_line;
+        
         // Check for comma - this will trigger skip_whitespace which collects trailing comments
         let token = lexer.peek()?;
         let has_comma = matches!(token, Token::Symbol(s) if s == ",");
         
-        // Now check for trailing inline comment after we've peeked (which calls skip_whitespace)
-        let trailing_comment = extract_next_trailing_comment(lexer);
+        // Now check for trailing inline comment using the start line
+        let trailing_comment = extract_trailing_comment_for_line(lexer, anchor_line);
         
         items.push(SelectItem { 
             expr, 
@@ -521,20 +529,17 @@ fn parse_select_list_with_comments(lexer: &mut Lexer) -> Result<Vec<SelectItem>,
     Ok(items)
 }
 
-fn extract_next_trailing_comment(lexer: &mut Lexer) -> Option<Comment> {
-    // Check if there's a comment that was just collected
-    if let Some(ref last_token) = lexer.last_token_info {
-        // Find and remove the first comment that's on the same line as the last token
-        if let Some(idx) = lexer.comments.iter().position(|c| {
-            c.is_line_comment && c.line == last_token.line && c.col > last_token.col
-        }) {
-            let comment = lexer.comments.remove(idx);
-            return Some(Comment {
-                text: comment.text,
-                is_line_comment: true,
-                attachment: CommentAttachment::TrailingInline,
-            });
-        }
+fn extract_trailing_comment_for_line(lexer: &mut Lexer, line: usize) -> Option<Comment> {
+    // Find and remove the first line comment that's on the same line
+    if let Some(idx) = lexer.comments.iter().position(|c| {
+        c.is_line_comment && c.line == line
+    }) {
+        let comment = lexer.comments.remove(idx);
+        return Some(Comment {
+            text: comment.text,
+            is_line_comment: true,
+            attachment: CommentAttachment::TrailingInline,
+        });
     }
     None
 }

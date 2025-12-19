@@ -1,7 +1,6 @@
 use sparkfmt_core::format_sql;
 
 #[test]
-#[ignore = "Trailing inline comments require additional work - tracked for future implementation"]
 fn test_trailing_inline_comment_on_select_item() {
     let input = "select a, b -- cols\nfrom t";
     let result = format_sql(input).unwrap();
@@ -101,7 +100,6 @@ fn test_hint_preserves_table_name_casing() {
 }
 
 #[test]
-#[ignore = "Multiple trailing inline comments require additional work"]
 fn test_multiple_trailing_comments() {
     let input = "select a, b -- first cols\n, c -- another col\nfrom t";
     let result = format_sql(input).unwrap();
@@ -115,7 +113,6 @@ fn test_multiple_trailing_comments() {
 }
 
 #[test]
-#[ignore = "Trailing inline comments with hints require additional work"]
 fn test_comment_and_hint_together() {
     let input = "-- Main query\nselect /*+ broadcast(t) */ a, b -- columns\nfrom t";
     let result = format_sql(input).unwrap();
@@ -130,7 +127,6 @@ fn test_comment_and_hint_together() {
 }
 
 #[test]
-#[ignore = "Full acceptance example requires trailing inline comment support"]
 fn test_acceptance_example_with_comment() {
     // This is the acceptance example from copilot-instructions.md
     let input = "select  a ,  b  -- cols\nfrom t\nwhere x = 1\n  and y = 2";
