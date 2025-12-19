@@ -270,7 +270,9 @@ fn parse_statement(lexer: &mut Lexer) -> Result<Statement, FormatError> {
         Token::Word(w) => {
             let word_upper = w.to_uppercase();
             match word_upper.as_str() {
-                "CREATE" | "DROP" | "DESCRIBE" | "DESC" | "SHOW" | "INSERT" | "DELETE" | "SET" | "USE" => {
+                "CREATE" | "DROP" | "DESCRIBE" | "DESC" | "SHOW" | "INSERT" | "DELETE" | "SET" | "USE" | 
+                "UPDATE" | "MERGE" | "TRUNCATE" | "ALTER" | "EXPLAIN" | "CACHE" | "UNCACHE" | 
+                "REFRESH" | "CLEAR" | "ANALYZE" | "RESET" => {
                     // For DDL/DML/session statements, collect leading comments
                     lexer.skip_whitespace();
                     let leading_comments = collect_leading_comments(lexer);
@@ -284,6 +286,17 @@ fn parse_statement(lexer: &mut Lexer) -> Result<Statement, FormatError> {
                         "DELETE" => parse_delete_statement(lexer, leading_comments),
                         "SET" => parse_set_statement(lexer, leading_comments),
                         "USE" => parse_use_statement(lexer, leading_comments),
+                        "UPDATE" => parse_update_statement(lexer, leading_comments),
+                        "MERGE" => parse_merge_statement(lexer, leading_comments),
+                        "TRUNCATE" => parse_truncate_statement(lexer, leading_comments),
+                        "ALTER" => parse_alter_statement(lexer, leading_comments),
+                        "EXPLAIN" => parse_explain_statement(lexer, leading_comments),
+                        "CACHE" => parse_cache_statement(lexer, leading_comments),
+                        "UNCACHE" => parse_uncache_statement(lexer, leading_comments),
+                        "REFRESH" => parse_refresh_statement(lexer, leading_comments),
+                        "CLEAR" => parse_clear_cache_statement(lexer, leading_comments),
+                        "ANALYZE" => parse_analyze_statement(lexer, leading_comments),
+                        "RESET" => parse_reset_statement(lexer, leading_comments),
                         _ => unreachable!()
                     }
                 },
@@ -964,10 +977,48 @@ fn collect_leading_comments(lexer: &mut Lexer) -> Vec<Comment> {
 fn parse_create_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> Result<Statement, FormatError> {
     lexer.expect_keyword("CREATE")?;
     
-    if lexer.is_keyword("TABLE")? {
-        parse_create_table(lexer, leading_comments)
+    // Check for OR REPLACE
+    let or_replace = if lexer.is_keyword("OR")? {
+        lexer.expect_keyword("OR")?;
+        lexer.expect_keyword("REPLACE")?;
+        true
     } else {
-        Err(FormatError::new("Only CREATE TABLE is currently supported"))
+        false
+    };
+    
+    // Check for TEMPORARY / GLOBAL TEMPORARY
+    let temporary = if lexer.is_keyword("TEMPORARY")? {
+        lexer.expect_keyword("TEMPORARY")?;
+        true
+    } else if lexer.is_keyword("GLOBAL")? {
+        lexer.expect_keyword("GLOBAL")?;
+        lexer.expect_keyword("TEMPORARY")?;
+        true
+    } else {
+        false
+    };
+    
+    // Dispatch based on TABLE vs VIEW
+    if lexer.is_keyword("TABLE")? {
+        if or_replace || temporary {
+            return Err(FormatError::new("OR REPLACE and TEMPORARY not supported for CREATE TABLE"));
+        }
+        parse_create_table(lexer, leading_comments)
+    } else if lexer.is_keyword("VIEW")? {
+        lexer.expect_keyword("VIEW")?;
+        let view_name = parse_identifier(lexer)?;
+        lexer.expect_keyword("AS")?;
+        let query = parse_statement(lexer)?;
+        
+        Ok(Statement::CreateView(CreateViewStmt {
+            or_replace,
+            temporary,
+            view_name,
+            query: Box::new(query),
+            leading_comments,
+        }))
+    } else {
+        Err(FormatError::new("Expected TABLE or VIEW after CREATE"))
     }
 }
 
@@ -1006,23 +1057,40 @@ fn parse_create_table(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> Resu
 
 fn parse_drop_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> Result<Statement, FormatError> {
     lexer.expect_keyword("DROP")?;
-    lexer.expect_keyword("TABLE")?;
     
-    let if_exists = if lexer.is_keyword("IF")? {
-        lexer.expect_keyword("IF")?;
-        lexer.expect_keyword("EXISTS")?;
-        true
+    if lexer.is_keyword("TABLE")? {
+        lexer.expect_keyword("TABLE")?;
+        let if_exists = if lexer.is_keyword("IF")? {
+            lexer.expect_keyword("IF")?;
+            lexer.expect_keyword("EXISTS")?;
+            true
+        } else {
+            false
+        };
+        let table_name = parse_identifier(lexer)?;
+        Ok(Statement::DropTable(DropTableStmt {
+            table_name,
+            if_exists,
+            leading_comments,
+        }))
+    } else if lexer.is_keyword("VIEW")? {
+        lexer.expect_keyword("VIEW")?;
+        let if_exists = if lexer.is_keyword("IF")? {
+            lexer.expect_keyword("IF")?;
+            lexer.expect_keyword("EXISTS")?;
+            true
+        } else {
+            false
+        };
+        let view_name = parse_identifier(lexer)?;
+        Ok(Statement::DropView(DropViewStmt {
+            view_name,
+            if_exists,
+            leading_comments,
+        }))
     } else {
-        false
-    };
-    
-    let table_name = parse_identifier(lexer)?;
-    
-    Ok(Statement::DropTable(DropTableStmt {
-        table_name,
-        if_exists,
-        leading_comments,
-    }))
+        Err(FormatError::new("Expected TABLE or VIEW after DROP"))
+    }
 }
 
 fn parse_describe_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> Result<Statement, FormatError> {
@@ -1057,37 +1125,80 @@ fn parse_describe_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -
 
 fn parse_show_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> Result<Statement, FormatError> {
     lexer.expect_keyword("SHOW")?;
-    lexer.expect_keyword("TABLES")?;
     
-    let in_database = if lexer.is_keyword("IN")? {
-        lexer.expect_keyword("IN")?;
-        Some(parse_identifier(lexer)?)
+    if lexer.is_keyword("TABLES")? {
+        lexer.expect_keyword("TABLES")?;
+        let in_database = if lexer.is_keyword("IN")? || lexer.is_keyword("FROM")? {
+            lexer.next()?; // consume IN or FROM
+            Some(parse_identifier(lexer)?)
+        } else {
+            None
+        };
+        Ok(Statement::ShowTables(ShowTablesStmt { in_database, leading_comments }))
+    } else if lexer.is_keyword("DATABASES")? || lexer.is_keyword("SCHEMAS")? {
+        lexer.next()?; // consume DATABASES or SCHEMAS
+        Ok(Statement::ShowDatabases(ShowDatabasesStmt { leading_comments }))
+    } else if lexer.is_keyword("VIEWS")? {
+        lexer.expect_keyword("VIEWS")?;
+        let in_database = if lexer.is_keyword("IN")? || lexer.is_keyword("FROM")? {
+            lexer.next()?;
+            Some(parse_identifier(lexer)?)
+        } else {
+            None
+        };
+        Ok(Statement::ShowViews(ShowViewsStmt { in_database, leading_comments }))
+    } else if lexer.is_keyword("COLUMNS")? {
+        lexer.expect_keyword("COLUMNS")?;
+        lexer.expect_keyword("FROM")?;
+        let table_name = parse_identifier(lexer)?;
+        Ok(Statement::ShowColumns(ShowColumnsStmt { table_name, leading_comments }))
     } else {
-        None
-    };
-    
-    Ok(Statement::ShowTables(ShowTablesStmt {
-        in_database,
-        leading_comments,
-    }))
+        Err(FormatError::new("Expected TABLES, DATABASES, VIEWS, or COLUMNS after SHOW"))
+    }
 }
 
 // DML Statement Parsers
 
 fn parse_insert_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> Result<Statement, FormatError> {
     lexer.expect_keyword("INSERT")?;
-    lexer.expect_keyword("INTO")?;
+    
+    // Check for OVERWRITE vs INTO
+    let is_overwrite = if lexer.is_keyword("OVERWRITE")? {
+        lexer.expect_keyword("OVERWRITE")?;
+        true
+    } else {
+        lexer.expect_keyword("INTO")?;
+        false
+    };
     
     let table_name = parse_identifier(lexer)?;
     
-    // Parse the SELECT query
-    let query = Box::new(parse_statement(lexer)?);
-    
-    Ok(Statement::InsertInto(InsertIntoStmt {
-        table_name,
-        query,
-        leading_comments,
-    }))
+    // Check for VALUES vs SELECT
+    if lexer.is_keyword("VALUES")? {
+        lexer.expect_keyword("VALUES")?;
+        let values = parse_values_list(lexer)?;
+        Ok(Statement::InsertValues(InsertValuesStmt {
+            table_name,
+            values,
+            leading_comments,
+        }))
+    } else {
+        // It's a SELECT (or WITH SELECT)
+        let query = parse_statement(lexer)?;
+        if is_overwrite {
+            Ok(Statement::InsertOverwrite(InsertOverwriteStmt {
+                table_name,
+                query: Box::new(query),
+                leading_comments,
+            }))
+        } else {
+            Ok(Statement::InsertInto(InsertIntoStmt {
+                table_name,
+                query: Box::new(query),
+                leading_comments,
+            }))
+        }
+    }
 }
 
 fn parse_delete_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> Result<Statement, FormatError> {
@@ -1154,6 +1265,356 @@ fn parse_use_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> Res
     
     Ok(Statement::UseDatabase(UseDatabaseStmt {
         database_name,
+        leading_comments,
+    }))
+}
+
+// Helper Functions
+
+fn parse_values_list(lexer: &mut Lexer) -> Result<Vec<Vec<String>>, FormatError> {
+    let mut rows = Vec::new();
+    
+    loop {
+        lexer.expect_symbol("(")?;
+        let mut row = Vec::new();
+        
+        loop {
+            // Collect value as string (simplified - just collect tokens until , or ))
+            let token = lexer.next()?;
+            match token {
+                Token::Number(n) => row.push(n),
+                Token::StringLiteral(s) => row.push(format!("'{}'", s)),
+                Token::Word(w) => row.push(w),
+                _ => return Err(FormatError::new("Unexpected token in VALUES")),
+            }
+            
+            let next = lexer.peek()?;
+            if matches!(next, Token::Symbol(s) if s == ",") {
+                lexer.next()?; // consume comma
+            } else {
+                break;
+            }
+        }
+        
+        lexer.expect_symbol(")")?;
+        rows.push(row);
+        
+        // Check for more rows
+        let next = lexer.peek()?;
+        if matches!(next, Token::Symbol(s) if s == ",") {
+            lexer.next()?; // consume comma
+        } else {
+            break;
+        }
+    }
+    
+    Ok(rows)
+}
+
+fn parse_expression_as_string(lexer: &mut Lexer) -> Result<String, FormatError> {
+    let mut parts = Vec::new();
+    let mut paren_depth = 0;
+    
+    loop {
+        let token = lexer.peek()?;
+        
+        // Stop at comma (same level), WHERE, or EOF
+        match &token {
+            Token::Symbol(s) if s == "," && paren_depth == 0 => break,
+            Token::Symbol(s) if s == "(" => paren_depth += 1,
+            Token::Symbol(s) if s == ")" => {
+                if paren_depth == 0 {
+                    break;
+                }
+                paren_depth -= 1;
+            },
+            Token::Word(w) if paren_depth == 0 && is_clause_keyword(&w.to_uppercase()) => break,
+            Token::Eof => break,
+            _ => {}
+        }
+        
+        match lexer.next()? {
+            Token::Word(w) => parts.push(w),
+            Token::Symbol(s) => parts.push(s),
+            Token::Number(n) => parts.push(n),
+            Token::StringLiteral(s) => parts.push(format!("'{}'", s)),
+            _ => {}
+        }
+    }
+    
+    Ok(parts.join(""))
+}
+
+fn is_clause_keyword(word: &str) -> bool {
+    matches!(word, "WHERE" | "SET" | "FROM" | "GROUP" | "ORDER" | "HAVING" | "LIMIT" | "UNION")
+}
+
+// New Statement Parsers
+
+fn parse_update_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> Result<Statement, FormatError> {
+    lexer.expect_keyword("UPDATE")?;
+    let table_name = parse_identifier(lexer)?;
+    lexer.expect_keyword("SET")?;
+    
+    let mut assignments = Vec::new();
+    loop {
+        let col = parse_identifier(lexer)?;
+        lexer.expect_symbol("=")?;
+        // Simplified: collect expression as string until , or WHERE or EOF
+        let val = parse_expression_as_string(lexer)?;
+        assignments.push((col, val));
+        
+        let next = lexer.peek()?;
+        if matches!(next, Token::Symbol(s) if s == ",") {
+            lexer.next()?;
+        } else {
+            break;
+        }
+    }
+    
+    let where_clause = if lexer.is_keyword("WHERE")? {
+        Some(parse_where_clause(lexer)?)
+    } else {
+        None
+    };
+    
+    Ok(Statement::Update(UpdateStmt {
+        table_name,
+        assignments,
+        where_clause,
+        leading_comments,
+    }))
+}
+
+fn parse_truncate_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> Result<Statement, FormatError> {
+    lexer.expect_keyword("TRUNCATE")?;
+    lexer.expect_keyword("TABLE")?;
+    let table_name = parse_identifier(lexer)?;
+    
+    Ok(Statement::TruncateTable(TruncateTableStmt {
+        table_name,
+        leading_comments,
+    }))
+}
+
+fn parse_alter_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> Result<Statement, FormatError> {
+    lexer.expect_keyword("ALTER")?;
+    lexer.expect_keyword("TABLE")?;
+    let table_name = parse_identifier(lexer)?;
+    
+    // Collect rest of statement as string (ADD COLUMN, DROP COLUMN, RENAME, etc.)
+    let mut action_parts = Vec::new();
+    loop {
+        match lexer.peek()? {
+            Token::Eof => break,
+            Token::Word(w) => {
+                let word = w.clone();
+                lexer.next()?;
+                action_parts.push(word.to_uppercase());
+            },
+            Token::Symbol(s) => {
+                let sym = s.clone();
+                lexer.next()?;
+                action_parts.push(sym);
+            },
+            _ => {
+                lexer.next()?;
+            }
+        }
+    }
+    
+    Ok(Statement::AlterTable(AlterTableStmt {
+        table_name,
+        action: action_parts.join(" "),
+        leading_comments,
+    }))
+}
+
+fn parse_explain_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> Result<Statement, FormatError> {
+    lexer.expect_keyword("EXPLAIN")?;
+    
+    // Check for mode: EXTENDED, CODEGEN, COST, FORMATTED
+    let mode = if lexer.is_keyword("EXTENDED")? {
+        lexer.next()?;
+        Some("EXTENDED".to_string())
+    } else if lexer.is_keyword("CODEGEN")? {
+        lexer.next()?;
+        Some("CODEGEN".to_string())
+    } else if lexer.is_keyword("COST")? {
+        lexer.next()?;
+        Some("COST".to_string())
+    } else if lexer.is_keyword("FORMATTED")? {
+        lexer.next()?;
+        Some("FORMATTED".to_string())
+    } else {
+        None
+    };
+    
+    let query = parse_statement(lexer)?;
+    
+    Ok(Statement::Explain(ExplainStmt {
+        mode,
+        query: Box::new(query),
+        leading_comments,
+    }))
+}
+
+fn parse_cache_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> Result<Statement, FormatError> {
+    lexer.expect_keyword("CACHE")?;
+    
+    let lazy = if lexer.is_keyword("LAZY")? {
+        lexer.expect_keyword("LAZY")?;
+        true
+    } else {
+        false
+    };
+    
+    lexer.expect_keyword("TABLE")?;
+    let table_name = parse_identifier(lexer)?;
+    
+    // Optional AS SELECT
+    let query = if lexer.is_keyword("AS")? {
+        lexer.expect_keyword("AS")?;
+        Some(Box::new(parse_statement(lexer)?))
+    } else {
+        None
+    };
+    
+    Ok(Statement::CacheTable(CacheTableStmt {
+        lazy,
+        table_name,
+        query,
+        leading_comments,
+    }))
+}
+
+fn parse_uncache_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> Result<Statement, FormatError> {
+    lexer.expect_keyword("UNCACHE")?;
+    lexer.expect_keyword("TABLE")?;
+    let table_name = parse_identifier(lexer)?;
+    
+    Ok(Statement::UncacheTable(UncacheTableStmt {
+        table_name,
+        leading_comments,
+    }))
+}
+
+fn parse_refresh_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> Result<Statement, FormatError> {
+    lexer.expect_keyword("REFRESH")?;
+    lexer.expect_keyword("TABLE")?;
+    let table_name = parse_identifier(lexer)?;
+    
+    Ok(Statement::Refresh(RefreshStmt {
+        table_name,
+        leading_comments,
+    }))
+}
+
+fn parse_clear_cache_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> Result<Statement, FormatError> {
+    lexer.expect_keyword("CLEAR")?;
+    lexer.expect_keyword("CACHE")?;
+    
+    Ok(Statement::ClearCache(ClearCacheStmt { leading_comments }))
+}
+
+fn parse_analyze_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> Result<Statement, FormatError> {
+    lexer.expect_keyword("ANALYZE")?;
+    lexer.expect_keyword("TABLE")?;
+    let table_name = parse_identifier(lexer)?;
+    // Skip rest (COMPUTE STATISTICS, etc.)
+    
+    Ok(Statement::AnalyzeTable(AnalyzeTableStmt {
+        table_name,
+        leading_comments,
+    }))
+}
+
+fn parse_reset_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> Result<Statement, FormatError> {
+    lexer.expect_keyword("RESET")?;
+    
+    Ok(Statement::Reset(ResetStmt { leading_comments }))
+}
+
+fn parse_merge_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> Result<Statement, FormatError> {
+    lexer.expect_keyword("MERGE")?;
+    lexer.expect_keyword("INTO")?;
+    let target_table = parse_identifier(lexer)?;
+    
+    // Optional alias
+    if !lexer.is_keyword("USING")? {
+        let _ = parse_identifier(lexer)?; // consume alias
+    }
+    
+    lexer.expect_keyword("USING")?;
+    let source_table = parse_identifier(lexer)?;
+    
+    // Optional alias
+    if !lexer.is_keyword("ON")? {
+        let _ = parse_identifier(lexer)?; // consume alias
+    }
+    
+    lexer.expect_keyword("ON")?;
+    
+    // Collect ON condition as string until WHEN
+    let mut on_parts = Vec::new();
+    loop {
+        if lexer.is_keyword("WHEN")? {
+            break;
+        }
+        match lexer.next()? {
+            Token::Word(w) => on_parts.push(w),
+            Token::Symbol(s) => on_parts.push(s),
+            Token::Number(n) => on_parts.push(n),
+            Token::StringLiteral(s) => on_parts.push(format!("'{}'", s)),
+            Token::Eof => break,
+        }
+    }
+    let on_condition = on_parts.join(" ");
+    
+    // Parse WHEN clauses (simplified - collect as strings)
+    let mut when_matched = None;
+    let mut when_not_matched = None;
+    
+    while lexer.is_keyword("WHEN")? {
+        lexer.expect_keyword("WHEN")?;
+        
+        let is_not = if lexer.is_keyword("NOT")? {
+            lexer.expect_keyword("NOT")?;
+            true
+        } else {
+            false
+        };
+        
+        lexer.expect_keyword("MATCHED")?;
+        
+        // Collect rest until next WHEN or EOF
+        let mut clause_parts = vec![if is_not { "WHEN NOT MATCHED" } else { "WHEN MATCHED" }.to_string()];
+        loop {
+            if lexer.is_keyword("WHEN")? || matches!(lexer.peek()?, Token::Eof) {
+                break;
+            }
+            match lexer.next()? {
+                Token::Word(w) => clause_parts.push(w.to_uppercase()),
+                Token::Symbol(s) => clause_parts.push(s),
+                Token::Number(n) => clause_parts.push(n),
+                Token::StringLiteral(s) => clause_parts.push(format!("'{}'", s)),
+                _ => {}
+            }
+        }
+        
+        if is_not {
+            when_not_matched = Some(clause_parts.join(" "));
+        } else {
+            when_matched = Some(clause_parts.join(" "));
+        }
+    }
+    
+    Ok(Statement::Merge(MergeStmt {
+        target_table,
+        source_table,
+        on_condition,
+        when_matched,
+        when_not_matched,
         leading_comments,
     }))
 }
