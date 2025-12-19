@@ -4,6 +4,7 @@ pub mod ir;
 pub mod error;
 pub mod keywords;
 pub mod functions;
+pub mod hints;
 
 pub use error::FormatError;
 

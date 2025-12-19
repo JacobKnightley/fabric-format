@@ -73,6 +73,17 @@ Each comment must be attached to a syntactic anchor with one of three attachment
 - SQL keywords: **UPPERCASE** (SELECT, FROM, WHERE, etc.)
 - Identifiers: **preserved casing**
 - Built-in functions: **UPPERCASE** (COUNT, SUM, etc.)
+- **Context-sensitive casing** (aspirational):
+  - Keywords only uppercase in keyword positions
+  - Identifiers preserve casing even if they match keyword names
+  - Examples: `SELECT order FROM t` (order is column), `ORDER BY x` (ORDER is keyword)
+  - Current limitation: Keywords detected during lexing, context-sensitivity not yet implemented
+
+### Query Hints
+- Hint comments: `/*+ hint_name(args) */`
+- Hint names: **UPPERCASE** (BROADCAST, REPARTITION, etc.)
+- Arguments inside hints: **preserve casing** (table/column names)
+- Example: `/*+ BROADCAST(my_table) */`
 
 ### Aliases
 - Column aliases: **always use AS** (`col AS alias`)

@@ -39,7 +39,13 @@ The formatter reprints from scratch, normalizing all spacing:
 - Built-in functions are UPPERCASE (COUNT, SUM, COALESCE, etc.)
 - Identifiers preserve their original casing
 - User-defined functions preserve their original casing
-- Built-in functions remain lowercase
+
+### Query Hints (Planned)
+
+- Query hint support in development
+- Hint names will be UPPERCASE: `/*+ BROADCAST(table) */`
+- Arguments inside hints will preserve casing
+- See `.github/copilot-instructions.md` for specification
 
 ### Aliases
 
