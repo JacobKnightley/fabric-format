@@ -344,7 +344,9 @@ pub struct UpdateStmt {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MergeStmt {
     pub target_table: String,
+    pub target_alias: Option<String>,
     pub source_table: String,
+    pub source_alias: Option<String>,
     pub on_condition: String,
     pub when_matched: Option<String>,
     pub when_not_matched: Option<String>,

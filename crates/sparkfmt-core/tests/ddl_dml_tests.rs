@@ -305,7 +305,7 @@ fn test_truncate_table() {
 #[test]
 fn test_alter_table_add_column() {
     let input = "alter table t add column c string";
-    let expected = "ALTER TABLE t ADD COLUMN C STRING";
+    let expected = "ALTER TABLE t ADD COLUMN c STRING";
     let result = format_sql(input).unwrap();
     assert_eq!(result, expected);
 }
@@ -384,6 +384,27 @@ fn test_analyze_table() {
 fn test_reset() {
     let input = "reset";
     let expected = "RESET";
+    let result = format_sql(input).unwrap();
+    assert_eq!(result, expected);
+}
+
+// Additional tests for MERGE and ALTER TABLE fixes
+
+#[test]
+fn test_merge_with_aliases() {
+    let input = "MERGE INTO target t USING source s ON t.id = s.id WHEN MATCHED THEN UPDATE SET val = s.val";
+    let expected = "MERGE INTO target t
+USING source s
+ON t.id=s.id
+WHEN MATCHED THEN UPDATE SET val=s.val";
+    let result = format_sql(input).unwrap();
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn test_alter_table_rename() {
+    let input = "ALTER TABLE myTable RENAME TO newTable";
+    let expected = "ALTER TABLE myTable RENAME TO newTable";
     let result = format_sql(input).unwrap();
     assert_eq!(result, expected);
 }

@@ -684,9 +684,17 @@ fn format_merge(stmt: &MergeStmt, output: &mut String, indent: usize) {
     
     output.push_str("MERGE INTO ");
     output.push_str(&stmt.target_table);
+    if let Some(ref alias) = stmt.target_alias {
+        output.push(' ');
+        output.push_str(alias);
+    }
     output.push('\n');
     output.push_str("USING ");
     output.push_str(&stmt.source_table);
+    if let Some(ref alias) = stmt.source_alias {
+        output.push(' ');
+        output.push_str(alias);
+    }
     output.push('\n');
     output.push_str("ON ");
     output.push_str(&stmt.on_condition);

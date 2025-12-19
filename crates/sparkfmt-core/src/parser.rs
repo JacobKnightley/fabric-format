@@ -1411,7 +1411,12 @@ fn parse_alter_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> R
             Token::Word(w) => {
                 let word = w.clone();
                 lexer.next()?;
-                action_parts.push(word.to_uppercase());
+                // Only uppercase if it's a keyword, preserve identifier casing
+                if crate::keywords::is_keyword(&word) {
+                    action_parts.push(word.to_uppercase());
+                } else {
+                    action_parts.push(word);
+                }
             },
             Token::Symbol(s) => {
                 let sym = s.clone();
@@ -1542,21 +1547,26 @@ fn parse_merge_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> R
     let target_table = parse_identifier(lexer)?;
     
     // Optional alias
-    if !lexer.is_keyword("USING")? {
-        let _ = parse_identifier(lexer)?; // consume alias
-    }
+    let target_alias = if !lexer.is_keyword("USING")? {
+        Some(parse_identifier(lexer)?)
+    } else {
+        None
+    };
     
     lexer.expect_keyword("USING")?;
     let source_table = parse_identifier(lexer)?;
     
     // Optional alias
-    if !lexer.is_keyword("ON")? {
-        let _ = parse_identifier(lexer)?; // consume alias
-    }
+    let source_alias = if !lexer.is_keyword("ON")? {
+        Some(parse_identifier(lexer)?)
+    } else {
+        None
+    };
     
     lexer.expect_keyword("ON")?;
     
     // Collect ON condition as string until WHEN
+    // Use smarter joining to avoid spaces around dots and operators
     let mut on_parts = Vec::new();
     loop {
         if lexer.is_keyword("WHEN")? {
@@ -1570,7 +1580,8 @@ fn parse_merge_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> R
             Token::Eof => break,
         }
     }
-    let on_condition = on_parts.join(" ");
+    // Join without spaces - formatter will handle spacing
+    let on_condition = on_parts.join("");
     
     // Parse WHEN clauses (simplified - collect as strings)
     let mut when_matched = None;
@@ -1590,29 +1601,57 @@ fn parse_merge_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> R
         
         // Collect rest until next WHEN or EOF
         let mut clause_parts = vec![if is_not { "WHEN NOT MATCHED" } else { "WHEN MATCHED" }.to_string()];
+        let mut prev_was_keyword = true;  // Track if previous token was a keyword
+        
         loop {
             if lexer.is_keyword("WHEN")? || matches!(lexer.peek()?, Token::Eof) {
                 break;
             }
             match lexer.next()? {
-                Token::Word(w) => clause_parts.push(w.to_uppercase()),
-                Token::Symbol(s) => clause_parts.push(s),
-                Token::Number(n) => clause_parts.push(n),
-                Token::StringLiteral(s) => clause_parts.push(s),  // Already includes quotes
+                Token::Word(w) => {
+                    let is_kw = crate::keywords::is_keyword(&w);
+                    let word_str = if is_kw {
+                        w.to_uppercase()
+                    } else {
+                        w
+                    };
+                    
+                    // Add space before if previous was keyword or current is keyword
+                    if prev_was_keyword || is_kw {
+                        clause_parts.push(" ".to_string());
+                    }
+                    clause_parts.push(word_str);
+                    prev_was_keyword = is_kw;
+                },
+                Token::Symbol(s) => {
+                    clause_parts.push(s);
+                    prev_was_keyword = false;
+                },
+                Token::Number(n) => {
+                    clause_parts.push(n);
+                    prev_was_keyword = false;
+                },
+                Token::StringLiteral(s) => {
+                    clause_parts.push(s);
+                    prev_was_keyword = false;
+                },
                 _ => {}
             }
         }
         
+        // Join directly as spacing is already added
         if is_not {
-            when_not_matched = Some(clause_parts.join(" "));
+            when_not_matched = Some(clause_parts.join(""));
         } else {
-            when_matched = Some(clause_parts.join(" "));
+            when_matched = Some(clause_parts.join(""));
         }
     }
     
     Ok(Statement::Merge(MergeStmt {
         target_table,
+        target_alias,
         source_table,
+        source_alias,
         on_condition,
         when_matched,
         when_not_matched,
