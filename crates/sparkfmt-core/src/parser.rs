@@ -12,7 +12,13 @@ lazy_static! {
 
 pub fn parse(input: &str) -> Result<Statement, FormatError> {
     let mut lexer = Lexer::new(input);
-    parse_statement(&mut lexer)
+    let statement = parse_statement(&mut lexer)?;
+    
+    // TODO: Anchor comments to statement nodes
+    // For now, comments are extracted but not yet anchored/printed
+    // This is a foundation for the full comment anchoring system
+    
+    Ok(statement)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -29,6 +35,7 @@ struct Lexer {
     input: String,
     pos: usize,
     peeked: Option<Token>,
+    comments: Vec<(String, bool)>, // (text, is_line_comment)
 }
 
 impl Lexer {
@@ -37,6 +44,7 @@ impl Lexer {
             input: input.to_string(),
             pos: 0,
             peeked: None,
+            comments: Vec::new(),
         }
     }
 
@@ -44,21 +52,29 @@ impl Lexer {
         while self.pos < self.input.len() {
             let remaining = &self.input[self.pos..];
             
-            // Skip single-line comments
+            // Collect single-line comments
             if remaining.starts_with("--") {
                 if let Some(newline_pos) = remaining.find('\n') {
+                    let comment_text = remaining[..newline_pos].to_string();
+                    self.comments.push((comment_text, true));
                     self.pos += newline_pos + 1;
                 } else {
+                    let comment_text = remaining.to_string();
+                    self.comments.push((comment_text, true));
                     self.pos = self.input.len();
                 }
                 continue;
             }
             
-            // Skip multi-line comments
+            // Collect multi-line comments
             if remaining.starts_with("/*") {
                 if let Some(end_pos) = remaining.find("*/") {
+                    let comment_text = remaining[..end_pos + 2].to_string();
+                    self.comments.push((comment_text, false));
                     self.pos += end_pos + 2;
                 } else {
+                    let comment_text = remaining.to_string();
+                    self.comments.push((comment_text, false));
                     self.pos = self.input.len();
                 }
                 continue;
