@@ -2,26 +2,52 @@ use sparkfmt_core::format_sql;
 
 #[test]
 fn test_basic_comment_preservation_goal() {
-    // This test documents the GOAL for comment handling
-    // Currently comments are stripped during parsing
-    // Future implementation should preserve comments with proper anchoring
+    // This test documents the GOAL for comment handling per the refactor request
+    // 
+    // Target behavior (from copilot-instructions.md):
+    // Input:  select  a ,  b  -- cols
+    //         from t
+    //         where x = 1
+    //           and y = 2
+    //
+    // Output: SELECT
+    //              a
+    //             ,b -- cols
+    //         FROM t
+    //         WHERE
+    //             x=1
+    //             AND y=2
+    //
+    // The comment "-- cols" should be anchored as TrailingInline to 'b'
+    // because it appears after 'b' on the same original line.
     
     let input = "select  a ,  b  -- cols\nfrom t\nwhere x = 1\n  and y = 2";
     
     let result = format_sql(input).unwrap();
     
-    // Current behavior: comments are stripped
-    // This test passes now showing current behavior
+    // Current behavior: comments are stripped during parsing
     assert!(result.contains("SELECT"));
     assert!(result.contains("FROM t"));
+    assert!(result.contains("WHERE"));
+    assert!(result.contains("x=1"));
+    assert!(result.contains("AND y=2"));
     
-    // GOAL (not yet implemented): comment should be preserved
-    // When comment anchoring is fully implemented, this should pass:
+    // GOAL (not yet fully implemented): comment should be preserved
+    // When comment anchoring is fully implemented, these should pass:
     // assert!(result.contains("-- cols"));
+    // assert!(result.contains(",b -- cols"));
     
-    println!("Input:\n{}\n", input);
-    println!("Output:\n{}\n", result);
-    println!("Note: Comment preservation is planned for future implementation");
+    println!("Current Input:\n{}\n", input);
+    println!("Current Output:\n{}\n", result);
+    println!("\n=== GOAL (from refactor request) ===");
+    println!("SELECT");
+    println!("     a");
+    println!("    ,b -- cols");
+    println!("FROM t");
+    println!("WHERE");
+    println!("    x=1");
+    println!("    AND y=2");
+    println!("\nNote: Full comment anchoring system is foundation work in progress");
 }
 
 #[test]

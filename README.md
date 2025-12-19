@@ -5,10 +5,11 @@ A deterministic, opinionated Spark SQL formatter compiled to WASM.
 ## Features
 
 - **Deterministic formatting**: Same input always produces the same output
+- **Token-normalized printing**: Discards original whitespace, reprints from scratch
 - **Opinionated style**: Follows Databricks/Spark-style structural formatting
 - **WASM-ready**: Compiled to WebAssembly for browser and Node.js use
 - **Grammar-driven**: Based on Spark SQL's syntax
-- **Comment preservation**: Preserves SQL comments safely
+- **Comment handling**: Foundation for comment preservation (full anchoring system in progress)
 
 ## Formatting Rules
 
@@ -23,6 +24,14 @@ SELECT
     ,col3
 FROM table
 ```
+
+### Token Normalization
+
+The formatter reprints from scratch, normalizing all spacing:
+- **No spaces after commas** in function calls: `func(a,b,c)`
+- **No spaces around operators**: `x=1`, `a+b`
+- **Single space** between other tokens where needed
+- Original whitespace and line breaks are completely discarded
 
 ### Keywords
 

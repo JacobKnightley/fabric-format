@@ -11,9 +11,10 @@ This document summarizes the implementation of sparkfmt, a deterministic Spark S
 A complete Rust library implementing:
 
 - **Lexer**: Tokenizes SQL input into keywords, identifiers, symbols, numbers, and string literals
-  - Supports single-line (`--`) and multi-line (`/* */`) comments
+  - Collects single-line (`--`) and multi-line (`/* */`) comments during tokenization
   - Handles decimal numbers
   - Longest-match-first tokenization for multi-character operators
+  - Foundation for comment anchoring system
   
 - **Parser**: Recursive descent parser for Spark SQL
   - SELECT with DISTINCT
@@ -29,7 +30,9 @@ A complete Rust library implementing:
   - Function calls with multiple arguments
   - Parenthesized expressions
   
-- **Formatter**: Deterministic printer implementing the specification exactly
+- **Formatter**: Deterministic printer with token-normalized output
+  - Full reprint from scratch - discards original whitespace entirely
+  - Token normalization: no spaces after commas in functions, no spaces around operators
   - Comma-first style for SELECT, GROUP BY, ORDER BY
   - First item indent: 5 spaces
   - Subsequent items indent: 4 spaces with leading comma
@@ -50,7 +53,7 @@ WASM bindings using `wasm-bindgen`:
 
 ### 3. Test Suite
 
-29 comprehensive tests:
+33 comprehensive tests:
 
 **Acceptance Tests** (7 tests)
 - Exact match with specification example
@@ -77,6 +80,12 @@ WASM bindings using `wasm-bindgen`:
 - Complex WHERE with OR
 - Parse error handling
 
+**Comment Handling Tests** (4 tests)
+- Token normalization verification
+- Function call spacing (no spaces after commas)
+- Expression normalization (no spaces around operators)
+- Comment preservation goal documentation
+
 **Unit Tests** (2 tests)
 - Core library basic formatting
 - WASM wrapper basic formatting
@@ -85,8 +94,20 @@ WASM bindings using `wasm-bindgen`:
 
 - Comprehensive README.md with formatting rules and examples
 - IMPLEMENTATION.md (this document)
+- `.github/copilot-instructions.md` - Authoritative formatting guidelines
 - Inline code examples
 - Runnable examples in `crates/sparkfmt-core/examples/`
+
+### 5. Comment Handling (Foundation)
+
+Current status:
+- ✅ Comments are extracted during lexing
+- ✅ Comments are stored with type information (line vs block)
+- ✅ Foundation for anchoring system in place
+- 🚧 Comment anchoring logic (TrailingInline/TrailingOwnLine/Leading) - planned
+- 🚧 Comment printing with proper placement - planned
+
+The lexer collects comments during tokenization, creating the foundation for the full comment anchoring and printing system described in `.github/copilot-instructions.md`.
 
 ## Acceptance Test Result
 
@@ -160,9 +181,12 @@ Input SQL String
 4. **No Semantic Analysis**: Pure syntactic formatting, no query rewriting
 5. **Deterministic Output**: Same input always produces same output
 
-## Limitations (By Design)
+## Limitations (Current)
 
-1. **Comment Handling**: Comments are stripped during parsing (safe preservation would require significant complexity)
+1. **Comment Handling**: Foundation in place; full anchoring/printing system in progress
+   - Comments are extracted during lexing ✅
+   - Comment anchoring (TrailingInline/TrailingOwnLine/Leading) - planned
+   - See `.github/copilot-instructions.md` for full specification
 2. **SQL Coverage**: Focused on common SELECT patterns, not all Spark SQL features
 3. **No Optimization**: No query rewriting or optimization
 4. **Parse Errors**: Invalid SQL returns original input (no partial formatting)
@@ -182,21 +206,31 @@ Input SQL String
 - No external network access
 - No file system access
 
-## Future Enhancements (Out of Scope)
+## Roadmap
 
-1. Comment preservation and intelligent reflow
-2. Configuration options (indent size, style preferences)
-3. Full Spark SQL coverage (DDL, DML, etc.)
-4. Syntax error recovery and suggestions
-5. Format-on-type support
-6. LSP server integration
+### Short Term (In Progress)
+1. **Comment Anchoring System**
+   - Implement TrailingInline attachment for line comments after tokens
+   - Implement TrailingOwnLine attachment
+   - Implement Leading attachment
+   - Update printer to respect attachment rules
+
+### Future Enhancements
+1. Configuration options (indent size, style preferences)
+2. Full Spark SQL coverage (DDL, DML, etc.)
+3. Syntax error recovery and suggestions
+4. Format-on-type support
+5. LSP server integration
 
 ## Conclusion
 
 The sparkfmt implementation successfully delivers:
+- ✅ Token-normalized, full-reprint formatting model
 - ✅ Exact adherence to specification
 - ✅ Deterministic, idempotent formatting
 - ✅ WASM compilation support
+- ✅ Foundation for comment anchoring system
+- ✅ Comprehensive documentation (`.github/copilot-instructions.md`)
 - ✅ Comprehensive test coverage
 - ✅ Production-ready code quality
 - ✅ Zero compiler warnings
