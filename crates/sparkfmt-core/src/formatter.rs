@@ -193,6 +193,11 @@ fn format_select_list(items: &[SelectItem], output: &mut String, _indent: usize)
 fn format_expression(expr: &Expression, output: &mut String) {
     match expr {
         Expression::Identifier(id) => output.push_str(id),
+        Expression::QuotedIdentifier(name) => {
+            output.push('`');
+            output.push_str(name);
+            output.push('`');
+        }
         Expression::Star => output.push('*'),
         Expression::QualifiedStar(qualifier) => {
             output.push_str(qualifier);
@@ -221,11 +226,179 @@ fn format_expression(expr: &Expression, output: &mut String) {
             output.push_str(op);
             format_expression(right, output);
         }
+        Expression::UnaryOp { op, expr } => {
+            output.push_str(op);
+            if op == "NOT" {
+                output.push(' ');
+            }
+            format_expression(expr, output);
+        }
         Expression::Literal(lit) => output.push_str(lit),
         Expression::Parenthesized(expr) => {
             output.push('(');
             format_expression(expr, output);
             output.push(')');
+        }
+        Expression::Case { operand, when_clauses, else_clause } => {
+            output.push_str("CASE");
+            if let Some(op) = operand {
+                output.push(' ');
+                format_expression(op, output);
+            }
+            for wc in when_clauses {
+                output.push_str(" WHEN ");
+                format_expression(&wc.condition, output);
+                output.push_str(" THEN ");
+                format_expression(&wc.result, output);
+            }
+            if let Some(el) = else_clause {
+                output.push_str(" ELSE ");
+                format_expression(el, output);
+            }
+            output.push_str(" END");
+        }
+        Expression::Cast { expr, data_type } => {
+            output.push_str("CAST(");
+            format_expression(expr, output);
+            output.push_str(" AS ");
+            output.push_str(data_type);
+            output.push(')');
+        }
+        Expression::WindowFunction { function, partition_by, order_by, frame } => {
+            format_expression(function, output);
+            output.push_str(" OVER (");
+            
+            if !partition_by.is_empty() {
+                output.push_str("PARTITION BY ");
+                for (i, e) in partition_by.iter().enumerate() {
+                    if i > 0 { output.push(','); }
+                    format_expression(e, output);
+                }
+            }
+            
+            if !order_by.is_empty() {
+                if !partition_by.is_empty() { output.push(' '); }
+                output.push_str("ORDER BY ");
+                for (i, item) in order_by.iter().enumerate() {
+                    if i > 0 { output.push(','); }
+                    format_expression(&item.expr, output);
+                    if let Some(ref direction) = item.direction {
+                        match direction {
+                            OrderDirection::Asc => output.push_str(" ASC"),
+                            OrderDirection::Desc => output.push_str(" DESC"),
+                        }
+                    }
+                }
+            }
+            
+            if let Some(f) = frame {
+                output.push(' ');
+                output.push_str(&f.unit);
+                output.push(' ');
+                // Add BETWEEN keyword when there's a range with both start and end
+                if f.end.is_some() {
+                    output.push_str("BETWEEN ");
+                }
+                output.push_str(&f.start);
+                if let Some(end) = &f.end {
+                    output.push_str(" AND ");
+                    output.push_str(end);
+                }
+            }
+            
+            output.push(')');
+        }
+        Expression::Between { expr, low, high, negated } => {
+            format_expression(expr, output);
+            if *negated {
+                output.push_str(" NOT BETWEEN ");
+            } else {
+                output.push_str(" BETWEEN ");
+            }
+            format_expression(low, output);
+            output.push_str(" AND ");
+            format_expression(high, output);
+        }
+        Expression::InList { expr, list, negated } => {
+            format_expression(expr, output);
+            if *negated {
+                output.push_str(" NOT IN (");
+            } else {
+                output.push_str(" IN (");
+            }
+            for (i, item) in list.iter().enumerate() {
+                if i > 0 { output.push(','); }
+                format_expression(item, output);
+            }
+            output.push(')');
+        }
+        Expression::InSubquery { expr, subquery, negated } => {
+            format_expression(expr, output);
+            if *negated {
+                output.push_str(" NOT IN (");
+            } else {
+                output.push_str(" IN (");
+            }
+            format_statement(subquery, output, 0);
+            output.push(')');
+        }
+        Expression::IsNull { expr, negated } => {
+            format_expression(expr, output);
+            if *negated {
+                output.push_str(" IS NOT NULL");
+            } else {
+                output.push_str(" IS NULL");
+            }
+        }
+        Expression::Like { expr, pattern, escape, negated, regex } => {
+            format_expression(expr, output);
+            if *negated { output.push_str(" NOT"); }
+            if *regex {
+                output.push_str(" RLIKE ");
+            } else {
+                output.push_str(" LIKE ");
+            }
+            format_expression(pattern, output);
+            if let Some(esc) = escape {
+                output.push_str(" ESCAPE ");
+                format_expression(esc, output);
+            }
+        }
+        Expression::Subquery(stmt) => {
+            output.push('(');
+            format_statement(stmt, output, 0);
+            output.push(')');
+        }
+        Expression::Exists { subquery, negated } => {
+            if *negated { output.push_str("NOT "); }
+            output.push_str("EXISTS (");
+            format_statement(subquery, output, 0);
+            output.push(')');
+        }
+        Expression::ArrayAccess { array, index } => {
+            format_expression(array, output);
+            output.push('[');
+            format_expression(index, output);
+            output.push(']');
+        }
+        Expression::Raw(tokens) => {
+            for (i, token) in tokens.iter().enumerate() {
+                if i > 0 {
+                    output.push(' ');
+                }
+                match token {
+                    Token::Word(w) => output.push_str(w),
+                    Token::Number(n) => output.push_str(n),
+                    Token::StringLiteral(s) => output.push_str(s),
+                    Token::Symbol(s) => output.push_str(s),
+                    Token::QuotedIdentifier(s) => {
+                        output.push('`');
+                        output.push_str(s);
+                        output.push('`');
+                    }
+                    Token::Eof => {}
+                }
+            }
         }
     }
 }

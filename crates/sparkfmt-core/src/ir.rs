@@ -169,9 +169,14 @@ pub struct SelectItem {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
+    // === PRIMITIVES ===
     Identifier(String),
+    QuotedIdentifier(String),      // `col` or "col"
     Star,
     QualifiedStar(String),
+    Literal(String),
+    
+    // === GENERIC (scalable) ===
     FunctionCall {
         name: String,
         args: Vec<Expression>,
@@ -181,8 +186,91 @@ pub enum Expression {
         op: String,
         right: Box<Expression>,
     },
-    Literal(String),
+    UnaryOp {
+        op: String,
+        expr: Box<Expression>,
+    },
     Parenthesized(Box<Expression>),
+    
+    // === SPECIAL SYNTAX (need custom formatting) ===
+    Case {
+        operand: Option<Box<Expression>>,
+        when_clauses: Vec<WhenClause>,
+        else_clause: Option<Box<Expression>>,
+    },
+    Cast {
+        expr: Box<Expression>,
+        data_type: String,
+    },
+    WindowFunction {
+        function: Box<Expression>,
+        partition_by: Vec<Expression>,
+        order_by: Vec<OrderByItem>,
+        frame: Option<WindowFrame>,
+    },
+    Between {
+        expr: Box<Expression>,
+        low: Box<Expression>,
+        high: Box<Expression>,
+        negated: bool,
+    },
+    InList {
+        expr: Box<Expression>,
+        list: Vec<Expression>,
+        negated: bool,
+    },
+    InSubquery {
+        expr: Box<Expression>,
+        subquery: Box<Statement>,
+        negated: bool,
+    },
+    IsNull {
+        expr: Box<Expression>,
+        negated: bool,
+    },
+    Like {
+        expr: Box<Expression>,
+        pattern: Box<Expression>,
+        escape: Option<Box<Expression>>,
+        negated: bool,
+        regex: bool,               // RLIKE variant
+    },
+    Subquery(Box<Statement>),
+    Exists {
+        subquery: Box<Statement>,
+        negated: bool,
+    },
+    ArrayAccess {
+        array: Box<Expression>,
+        index: Box<Expression>,
+    },
+    
+    // === FALLBACK (graceful degradation) ===
+    Raw(Vec<Token>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WhenClause {
+    pub condition: Expression,
+    pub result: Expression,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WindowFrame {
+    pub unit: String,              // ROWS, RANGE
+    pub start: String,             // UNBOUNDED PRECEDING, CURRENT ROW, etc.
+    pub end: Option<String>,
+}
+
+// Token type for Raw expressions (re-exported from parser)
+#[derive(Debug, Clone, PartialEq)]
+pub enum Token {
+    Word(String),
+    Symbol(String),
+    Number(String),
+    StringLiteral(String),
+    QuotedIdentifier(String),
+    Eof,
 }
 
 #[derive(Debug, Clone, PartialEq)]

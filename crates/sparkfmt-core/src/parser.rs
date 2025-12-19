@@ -17,11 +17,12 @@ pub fn parse(input: &str) -> Result<Statement, FormatError> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum Token {
+pub enum ParserToken {
     Word(String), // Unified token for keywords and identifiers (preserves original casing)
     Symbol(String),
     Number(String),
     StringLiteral(String),
+    QuotedIdentifier(String), // Backtick or double-quoted identifiers
     Eof,
 }
 
@@ -38,7 +39,7 @@ struct Lexer {
     pos: usize,
     line: usize,
     col: usize,
-    peeked: Option<Token>,
+    peeked: Option<ParserToken>,
     comments: Vec<CommentInfo>,
 }
 
@@ -162,7 +163,7 @@ impl Lexer {
         }
     }
 
-    fn peek(&mut self) -> Result<Token, FormatError> {
+    fn peek(&mut self) -> Result<ParserToken, FormatError> {
         if let Some(ref token) = self.peeked {
             return Ok(token.clone());
         }
@@ -172,14 +173,14 @@ impl Lexer {
         Ok(token)
     }
 
-    fn next(&mut self) -> Result<Token, FormatError> {
+    fn next(&mut self) -> Result<ParserToken, FormatError> {
         if let Some(token) = self.peeked.take() {
             return Ok(token);
         }
         self.next_token()
     }
 
-    fn next_token(&mut self) -> Result<Token, FormatError> {
+    fn next_token(&mut self) -> Result<ParserToken, FormatError> {
         self.skip_whitespace();
         
         // Record token position
@@ -187,21 +188,37 @@ impl Lexer {
         let token_col = self.col;
         
         if self.pos >= self.input.len() {
-            return Ok(Token::Eof);
+            return Ok(ParserToken::Eof);
         }
         
         let remaining = &self.input[self.pos..];
         
+        // Try backtick-quoted identifier
+        if remaining.starts_with('`') {
+            self.advance_char(); // skip opening backtick
+            let mut ident = String::new();
+            while self.pos < self.input.len() {
+                let ch = self.input.as_bytes()[self.pos] as char;
+                if ch == '`' {
+                    self.advance_char(); // skip closing backtick
+                    return Ok(ParserToken::QuotedIdentifier(ident));
+                }
+                ident.push(ch);
+                self.advance_char();
+            }
+            return Err(FormatError::new("Unterminated quoted identifier".to_string()));
+        }
+        
         // Try string literal
         if let Some(m) = STRING_LITERAL.find(remaining) {
-            let token = Token::StringLiteral(m.as_str().to_string());
+            let token = ParserToken::StringLiteral(m.as_str().to_string());
             self.advance_by(m.end());
             return Ok(token);
         }
         
         // Try number
         if let Some(m) = NUMBER.find(remaining) {
-            let token = Token::Number(m.as_str().to_string());
+            let token = ParserToken::Number(m.as_str().to_string());
             self.advance_by(m.end());
             return Ok(token);
         }
@@ -210,22 +227,22 @@ impl Lexer {
         if let Some(m) = IDENTIFIER.find(remaining) {
             let text = m.as_str().to_string();
             self.advance_by(m.end());
-            return Ok(Token::Word(text)); // Preserve original casing
+            return Ok(ParserToken::Word(text)); // Preserve original casing
         }
         
         // Try multi-char operators first (longest match first)
         for symbol in &["<=", ">=", "<>", "!=", "||"] {
             if remaining.starts_with(symbol) {
                 self.advance_by(symbol.len());
-                return Ok(Token::Symbol(symbol.to_string()));
+                return Ok(ParserToken::Symbol(symbol.to_string()));
             }
         }
         
         // Try single-char symbols
-        for symbol in &["(", ")", ",", ".", "*", "=", "<", ">", "!", "+", "-", "/", "|"] {
+        for symbol in &["(", ")", ",", ".", "*", "=", "<", ">", "!", "+", "-", "/", "|", "[", "]", "~"] {
             if remaining.starts_with(symbol) {
                 self.advance_by(symbol.len());
-                return Ok(Token::Symbol(symbol.to_string()));
+                return Ok(ParserToken::Symbol(symbol.to_string()));
             }
         }
         
@@ -235,20 +252,21 @@ impl Lexer {
     fn expect_keyword(&mut self, keyword: &str) -> Result<(), FormatError> {
         let token = self.next()?;
         match token {
-            Token::Word(w) if w.to_uppercase() == keyword.to_uppercase() => Ok(()),
+            ParserToken::Word(w) if w.to_uppercase() == keyword.to_uppercase() => Ok(()),
             _ => Err(FormatError::new(format!("Expected keyword {}, got {:?}", keyword, token))),
         }
     }
 
     fn is_keyword(&mut self, keyword: &str) -> Result<bool, FormatError> {
         let token = self.peek()?;
-        Ok(matches!(token, Token::Word(w) if w.to_uppercase() == keyword.to_uppercase()))
+        Ok(matches!(token, ParserToken::Word(w) if w.to_uppercase() == keyword.to_uppercase()))
     }
     
     fn parse_identifier(&mut self) -> Result<String, FormatError> {
         let token = self.next()?;
         match token {
-            Token::Word(w) => Ok(w), // Return original casing
+            ParserToken::Word(w) => Ok(w), // Return original casing
+            ParserToken::QuotedIdentifier(q) => Ok(format!("`{}`", q)), // Return with backticks
             _ => Err(FormatError::new(format!("Expected identifier, got {:?}", token))),
         }
     }
@@ -256,7 +274,7 @@ impl Lexer {
     fn expect_symbol(&mut self, symbol: &str) -> Result<(), FormatError> {
         let token = self.next()?;
         match token {
-            Token::Symbol(s) if s == symbol => Ok(()),
+            ParserToken::Symbol(s) if s == symbol => Ok(()),
             _ => Err(FormatError::new(format!("Expected symbol {}, got {:?}", symbol, token))),
         }
     }
@@ -267,7 +285,7 @@ fn parse_statement(lexer: &mut Lexer) -> Result<Statement, FormatError> {
     let token = lexer.peek()?;
     
     match token {
-        Token::Word(w) => {
+        ParserToken::Word(w) => {
             let word_upper = w.to_uppercase();
             match word_upper.as_str() {
                 "CREATE" | "DROP" | "DESCRIBE" | "DESC" | "SHOW" | "INSERT" | "DELETE" | "SET" | "USE" | 
@@ -360,7 +378,7 @@ fn parse_with_clause(lexer: &mut Lexer) -> Result<WithClause, FormatError> {
         
         // Check for comma (more CTEs)
         let token = lexer.peek()?;
-        if matches!(token, Token::Symbol(s) if s == ",") {
+        if matches!(token, ParserToken::Symbol(s) if s == ",") {
             lexer.next()?;
         } else {
             break;
@@ -514,7 +532,7 @@ fn parse_select_list_with_comments(lexer: &mut Lexer) -> Result<Vec<SelectItem>,
             // Check for implicit alias (identifier after expression)
             let token = lexer.peek()?;
             match token {
-                Token::Word(_) => {
+                ParserToken::Word(_) => {
                     // Only if it's not a keyword or comma
                     if !lexer.is_keyword("FROM")? && !lexer.is_keyword("WHERE")? && 
                        !lexer.is_keyword("GROUP")? && !lexer.is_keyword("ORDER")? && 
@@ -534,7 +552,7 @@ fn parse_select_list_with_comments(lexer: &mut Lexer) -> Result<Vec<SelectItem>,
         
         // Check for comma - this will trigger skip_whitespace which collects trailing comments
         let token = lexer.peek()?;
-        let has_comma = matches!(token, Token::Symbol(s) if s == ",");
+        let has_comma = matches!(token, ParserToken::Symbol(s) if s == ",");
         
         // Now check for trailing inline comment using the start line
         let trailing_comment = extract_trailing_comment_for_line(lexer, anchor_line);
@@ -609,10 +627,100 @@ fn parse_and_expression(lexer: &mut Lexer) -> Result<Expression, FormatError> {
 fn parse_comparison_expression(lexer: &mut Lexer) -> Result<Expression, FormatError> {
     let mut left = parse_additive_expression(lexer)?;
     
+    // Check for NOT (for NOT BETWEEN, NOT IN, NOT LIKE)
+    let negated = if lexer.is_keyword("NOT")? {
+        lexer.expect_keyword("NOT")?;
+        true
+    } else {
+        false
+    };
+    
+    // Check for special operators
+    if lexer.is_keyword("IS")? {
+        lexer.expect_keyword("IS")?;
+        let not_null = if lexer.is_keyword("NOT")? {
+            lexer.expect_keyword("NOT")?;
+            true
+        } else {
+            false
+        };
+        lexer.expect_keyword("NULL")?;
+        return Ok(Expression::IsNull { expr: Box::new(left), negated: not_null });
+    }
+    
+    if lexer.is_keyword("BETWEEN")? {
+        lexer.expect_keyword("BETWEEN")?;
+        let low = parse_additive_expression(lexer)?;
+        lexer.expect_keyword("AND")?;
+        let high = parse_additive_expression(lexer)?;
+        return Ok(Expression::Between {
+            expr: Box::new(left),
+            low: Box::new(low),
+            high: Box::new(high),
+            negated,
+        });
+    }
+    
+    if lexer.is_keyword("IN")? {
+        lexer.expect_keyword("IN")?;
+        lexer.expect_symbol("(")?;
+        
+        // Check if subquery
+        if lexer.is_keyword("SELECT")? || lexer.is_keyword("WITH")? {
+            let subquery = parse_statement(lexer)?;
+            lexer.expect_symbol(")")?;
+            return Ok(Expression::InSubquery {
+                expr: Box::new(left),
+                subquery: Box::new(subquery),
+                negated,
+            });
+        }
+        
+        // Parse list
+        let mut list = Vec::new();
+        loop {
+            list.push(parse_expression(lexer)?);
+            let token = lexer.peek()?;
+            if matches!(token, ParserToken::Symbol(s) if s == ",") {
+                lexer.next()?;
+            } else {
+                break;
+            }
+        }
+        lexer.expect_symbol(")")?;
+        return Ok(Expression::InList {
+            expr: Box::new(left),
+            list,
+            negated,
+        });
+    }
+    
+    if lexer.is_keyword("LIKE")? || lexer.is_keyword("RLIKE")? {
+        let regex = lexer.is_keyword("RLIKE")?;
+        lexer.next()?;  // consume LIKE or RLIKE
+        let pattern = parse_additive_expression(lexer)?;
+        
+        let escape = if lexer.is_keyword("ESCAPE")? {
+            lexer.expect_keyword("ESCAPE")?;
+            Some(Box::new(parse_additive_expression(lexer)?))
+        } else {
+            None
+        };
+        
+        return Ok(Expression::Like {
+            expr: Box::new(left),
+            pattern: Box::new(pattern),
+            escape,
+            negated,
+            regex,
+        });
+    }
+    
+    // Standard comparison operators
     let token = lexer.peek()?;
-    if matches!(token, Token::Symbol(s) if matches!(s.as_str(), "=" | "<" | ">" | "<=" | ">=" | "<>" | "!=")) {
+    if matches!(token, ParserToken::Symbol(s) if matches!(s.as_str(), "=" | "<" | ">" | "<=" | ">=" | "<>" | "!=")) {
         let op = match lexer.next()? {
-            Token::Symbol(s) => s,
+            ParserToken::Symbol(s) => s,
             _ => unreachable!(),
         };
         let right = parse_additive_expression(lexer)?;
@@ -621,6 +729,10 @@ fn parse_comparison_expression(lexer: &mut Lexer) -> Result<Expression, FormatEr
             op,
             right: Box::new(right),
         };
+    } else if negated {
+        // If we had NOT but none of the special operators matched, this is a NOT unary op
+        // which should have been caught earlier. This is an error case.
+        return Err(FormatError::new("NOT must be followed by BETWEEN, IN, LIKE, or IS".to_string()));
     }
     
     Ok(left)
@@ -631,9 +743,9 @@ fn parse_additive_expression(lexer: &mut Lexer) -> Result<Expression, FormatErro
     
     loop {
         let token = lexer.peek()?;
-        if matches!(token, Token::Symbol(s) if s == "+" || s == "-") {
+        if matches!(token, ParserToken::Symbol(s) if s == "+" || s == "-") {
             let op = match lexer.next()? {
-                Token::Symbol(s) => s,
+                ParserToken::Symbol(s) => s,
                 _ => unreachable!(),
             };
             let right = parse_multiplicative_expression(lexer)?;
@@ -651,16 +763,16 @@ fn parse_additive_expression(lexer: &mut Lexer) -> Result<Expression, FormatErro
 }
 
 fn parse_multiplicative_expression(lexer: &mut Lexer) -> Result<Expression, FormatError> {
-    let mut left = parse_primary_expression(lexer)?;
+    let mut left = parse_unary_expression(lexer)?;
     
     loop {
         let token = lexer.peek()?;
-        if matches!(token, Token::Symbol(s) if s == "*" || s == "/") {
+        if matches!(token, ParserToken::Symbol(s) if s == "*" || s == "/") {
             let op = match lexer.next()? {
-                Token::Symbol(s) => s,
+                ParserToken::Symbol(s) => s,
                 _ => unreachable!(),
             };
-            let right = parse_primary_expression(lexer)?;
+            let right = parse_unary_expression(lexer)?;
             left = Expression::BinaryOp {
                 left: Box::new(left),
                 op,
@@ -674,35 +786,159 @@ fn parse_multiplicative_expression(lexer: &mut Lexer) -> Result<Expression, Form
     Ok(left)
 }
 
+fn parse_unary_expression(lexer: &mut Lexer) -> Result<Expression, FormatError> {
+    let token = lexer.peek()?;
+    
+    match token {
+        ParserToken::Symbol(s) if s == "-" || s == "+" || s == "~" => {
+            let op = match lexer.next()? {
+                ParserToken::Symbol(s) => s,
+                _ => unreachable!(),
+            };
+            let expr = parse_unary_expression(lexer)?;
+            Ok(Expression::UnaryOp { op, expr: Box::new(expr) })
+        }
+        ParserToken::Word(w) if w.eq_ignore_ascii_case("NOT") => {
+            lexer.next()?;
+            let expr = parse_unary_expression(lexer)?;
+            Ok(Expression::UnaryOp { op: "NOT".to_string(), expr: Box::new(expr) })
+        }
+        _ => parse_postfix_expression(lexer)
+    }
+}
+
+fn parse_postfix_expression(lexer: &mut Lexer) -> Result<Expression, FormatError> {
+    let mut expr = parse_primary_expression(lexer)?;
+    
+    loop {
+        let token = lexer.peek()?;
+        match token {
+            ParserToken::Symbol(s) if s == "[" => {
+                lexer.next()?;
+                let index = parse_expression(lexer)?;
+                lexer.expect_symbol("]")?;
+                expr = Expression::ArrayAccess {
+                    array: Box::new(expr),
+                    index: Box::new(index),
+                };
+            }
+            ParserToken::Word(w) if w.eq_ignore_ascii_case("OVER") => {
+                lexer.expect_keyword("OVER")?;
+                lexer.expect_symbol("(")?;
+                
+                let partition_by = if lexer.is_keyword("PARTITION")? {
+                    lexer.expect_keyword("PARTITION")?;
+                    lexer.expect_keyword("BY")?;
+                    parse_expression_list(lexer)?
+                } else {
+                    Vec::new()
+                };
+                
+                let order_by = if lexer.is_keyword("ORDER")? {
+                    lexer.expect_keyword("ORDER")?;
+                    lexer.expect_keyword("BY")?;
+                    parse_order_by_items(lexer)?
+                } else {
+                    Vec::new()
+                };
+                
+                let frame = parse_window_frame_opt(lexer)?;
+                lexer.expect_symbol(")")?;
+                
+                expr = Expression::WindowFunction {
+                    function: Box::new(expr),
+                    partition_by,
+                    order_by,
+                    frame,
+                };
+            }
+            _ => break,
+        }
+    }
+    
+    Ok(expr)
+}
+
 fn parse_primary_expression(lexer: &mut Lexer) -> Result<Expression, FormatError> {
     let token = lexer.peek()?;
     
     match token {
-        Token::Symbol(s) if s == "(" => {
+        ParserToken::Symbol(s) if s == "(" => {
             lexer.next()?;
+            
+            // Check if it's a subquery
+            if lexer.is_keyword("SELECT")? || lexer.is_keyword("WITH")? {
+                let subquery = parse_statement(lexer)?;
+                lexer.expect_symbol(")")?;
+                return Ok(Expression::Subquery(Box::new(subquery)));
+            }
+            
+            // Otherwise parenthesized expression
             let expr = parse_expression(lexer)?;
             lexer.expect_symbol(")")?;
             Ok(Expression::Parenthesized(Box::new(expr)))
         }
-        Token::StringLiteral(_) | Token::Number(_) => {
+        ParserToken::StringLiteral(_) | ParserToken::Number(_) => {
             let lit = match lexer.next()? {
-                Token::StringLiteral(s) => s,
-                Token::Number(n) => n,
+                ParserToken::StringLiteral(s) => s,
+                ParserToken::Number(n) => n,
                 _ => unreachable!(),
             };
             Ok(Expression::Literal(lit))
         }
-        Token::Symbol(s) if s == "*" => {
+        ParserToken::Symbol(s) if s == "*" => {
             lexer.next()?;
             Ok(Expression::Star)
         }
-        Token::Word(_) => {
+        ParserToken::QuotedIdentifier(_) => {
+            let name = match lexer.next()? {
+                ParserToken::QuotedIdentifier(n) => n,
+                _ => unreachable!(),
+            };
+            
+            // Check for qualified identifier with quoted identifier
+            let token = lexer.peek()?;
+            if matches!(token, ParserToken::Symbol(s) if s == ".") {
+                lexer.next()?;
+                let field_token = lexer.peek()?;
+                if matches!(field_token, ParserToken::Symbol(s) if s == "*") {
+                    lexer.next()?;
+                    Ok(Expression::QualifiedStar(format!("`{}`", name)))
+                } else {
+                    // It's a qualified identifier (e.g., `table`.`col`)
+                    let field = match lexer.next()? {
+                        ParserToken::QuotedIdentifier(f) => format!("`{}`", f),
+                        ParserToken::Word(f) => f,
+                        _ => return Err(FormatError::new("Expected field name after dot".to_string())),
+                    };
+                    Ok(Expression::Identifier(format!("`{}`.{}", name, field)))
+                }
+            } else {
+                Ok(Expression::QuotedIdentifier(name))
+            }
+        }
+        ParserToken::Word(_) => {
+            // Check for special keywords first
+            if lexer.is_keyword("CASE")? {
+                return parse_case_expression(lexer);
+            }
+            if lexer.is_keyword("CAST")? {
+                return parse_cast_expression(lexer);
+            }
+            if lexer.is_keyword("EXISTS")? {
+                lexer.expect_keyword("EXISTS")?;
+                lexer.expect_symbol("(")?;
+                let subquery = parse_statement(lexer)?;
+                lexer.expect_symbol(")")?;
+                return Ok(Expression::Exists { subquery: Box::new(subquery), negated: false });
+            }
+            
             let name = lexer.parse_identifier()?;
             
             // Check for function call or qualified identifier
             let token = lexer.peek()?;
-            let is_open_paren = matches!(&token, Token::Symbol(s) if s == "(");
-            let is_dot = matches!(&token, Token::Symbol(s) if s == ".");
+            let is_open_paren = matches!(&token, ParserToken::Symbol(s) if s == "(");
+            let is_dot = matches!(&token, ParserToken::Symbol(s) if s == ".");
             
             if is_open_paren {
                 lexer.next()?;
@@ -710,12 +946,12 @@ fn parse_primary_expression(lexer: &mut Lexer) -> Result<Expression, FormatError
                 
                 // Check for empty args
                 let token = lexer.peek()?;
-                if !matches!(token, Token::Symbol(s) if s == ")") {
+                if !matches!(token, ParserToken::Symbol(s) if s == ")") {
                     loop {
                         args.push(parse_expression(lexer)?);
                         
                         let token = lexer.peek()?;
-                        if matches!(token, Token::Symbol(s) if s == ",") {
+                        if matches!(token, ParserToken::Symbol(s) if s == ",") {
                             lexer.next()?;
                         } else {
                             break;
@@ -729,7 +965,7 @@ fn parse_primary_expression(lexer: &mut Lexer) -> Result<Expression, FormatError
                 // Qualified star (e.g., t.*)
                 lexer.next()?;
                 let token = lexer.peek()?;
-                if matches!(token, Token::Symbol(s) if s == "*") {
+                if matches!(token, ParserToken::Symbol(s) if s == "*") {
                     lexer.next()?;
                     Ok(Expression::QualifiedStar(name))
                 } else {
@@ -749,6 +985,102 @@ fn parse_identifier(lexer: &mut Lexer) -> Result<String, FormatError> {
     lexer.parse_identifier()
 }
 
+fn parse_case_expression(lexer: &mut Lexer) -> Result<Expression, FormatError> {
+    lexer.expect_keyword("CASE")?;
+    
+    // Check for simple CASE (CASE x WHEN 1 THEN ...)
+    let operand = if !lexer.is_keyword("WHEN")? {
+        Some(Box::new(parse_expression(lexer)?))
+    } else {
+        None
+    };
+    
+    let mut when_clauses = Vec::new();
+    while lexer.is_keyword("WHEN")? {
+        lexer.expect_keyword("WHEN")?;
+        let condition = parse_expression(lexer)?;
+        lexer.expect_keyword("THEN")?;
+        let result = parse_expression(lexer)?;
+        when_clauses.push(WhenClause { condition, result });
+    }
+    
+    let else_clause = if lexer.is_keyword("ELSE")? {
+        lexer.expect_keyword("ELSE")?;
+        Some(Box::new(parse_expression(lexer)?))
+    } else {
+        None
+    };
+    
+    lexer.expect_keyword("END")?;
+    
+    Ok(Expression::Case { operand, when_clauses, else_clause })
+}
+
+fn parse_cast_expression(lexer: &mut Lexer) -> Result<Expression, FormatError> {
+    lexer.expect_keyword("CAST")?;
+    lexer.expect_symbol("(")?;
+    let expr = parse_expression(lexer)?;
+    lexer.expect_keyword("AS")?;
+    let data_type = parse_data_type(lexer)?;
+    lexer.expect_symbol(")")?;
+    
+    Ok(Expression::Cast { expr: Box::new(expr), data_type })
+}
+
+fn parse_data_type(lexer: &mut Lexer) -> Result<String, FormatError> {
+    let mut type_str = String::new();
+    let base = lexer.parse_identifier()?;
+    type_str.push_str(&base.to_uppercase());
+    
+    // Handle DECIMAL(10,2), ARRAY<STRING>, MAP<K,V>
+    let token = lexer.peek()?;
+    match token {
+        ParserToken::Symbol(s) if s == "(" => {
+            type_str.push_str(&collect_balanced(lexer, "(", ")")?);
+        }
+        ParserToken::Symbol(s) if s == "<" => {
+            type_str.push_str(&collect_balanced(lexer, "<", ">")?);
+        }
+        _ => {}
+    }
+    Ok(type_str)
+}
+
+fn collect_balanced(lexer: &mut Lexer, open: &str, close: &str) -> Result<String, FormatError> {
+    let mut result = String::new();
+    lexer.expect_symbol(open)?;
+    result.push_str(open);
+    
+    let mut depth = 1;
+    while depth > 0 {
+        let token = lexer.next()?;
+        match token {
+            ParserToken::Symbol(s) if s == open => {
+                depth += 1;
+                result.push_str(&s);
+            }
+            ParserToken::Symbol(s) if s == close => {
+                depth -= 1;
+                result.push_str(&s);
+            }
+            ParserToken::Word(w) => {
+                result.push_str(&w.to_uppercase());
+            }
+            ParserToken::Number(n) => {
+                result.push_str(&n);
+            }
+            ParserToken::Symbol(s) => {
+                result.push_str(&s);
+            }
+            ParserToken::Eof => {
+                return Err(FormatError::new(format!("Unexpected EOF while parsing balanced {}{}", open, close)));
+            }
+            _ => {}
+        }
+    }
+    Ok(result)
+}
+
 fn parse_from_clause(lexer: &mut Lexer) -> Result<FromClause, FormatError> {
     lexer.expect_keyword("FROM")?;
     
@@ -765,7 +1097,7 @@ fn parse_from_clause(lexer: &mut Lexer) -> Result<FromClause, FormatError> {
 
 fn is_join_keyword(lexer: &mut Lexer) -> Result<bool, FormatError> {
     let token = lexer.peek()?;
-    Ok(matches!(token, Token::Word(w) if matches!(w.to_uppercase().as_str(), "INNER" | "LEFT" | "RIGHT" | "FULL" | "CROSS" | "JOIN")))
+    Ok(matches!(token, ParserToken::Word(w) if matches!(w.to_uppercase().as_str(), "INNER" | "LEFT" | "RIGHT" | "FULL" | "CROSS" | "JOIN")))
 }
 
 fn parse_join(lexer: &mut Lexer) -> Result<Join, FormatError> {
@@ -829,7 +1161,7 @@ fn parse_table_ref(lexer: &mut Lexer) -> Result<TableRef, FormatError> {
         // Check for implicit alias
         let token = lexer.peek()?;
         match token {
-            Token::Word(_) => {
+            ParserToken::Word(_) => {
                 // Make sure it's not a keyword
                 if !is_join_keyword(lexer)? && !lexer.is_keyword("ON")? && 
                    !lexer.is_keyword("WHERE")? && 
@@ -903,7 +1235,7 @@ fn parse_group_by_clause(lexer: &mut Lexer) -> Result<GroupByClause, FormatError
         items.push(parse_expression(lexer)?);
         
         let token = lexer.peek()?;
-        if matches!(token, Token::Symbol(s) if s == ",") {
+        if matches!(token, ParserToken::Symbol(s) if s == ",") {
             lexer.next()?;
         } else {
             break;
@@ -935,7 +1267,7 @@ fn parse_order_by_clause(lexer: &mut Lexer) -> Result<OrderByClause, FormatError
         items.push(OrderByItem { expr, direction });
         
         let token = lexer.peek()?;
-        if matches!(token, Token::Symbol(s) if s == ",") {
+        if matches!(token, ParserToken::Symbol(s) if s == ",") {
             lexer.next()?;
         } else {
             break;
@@ -949,10 +1281,124 @@ fn parse_limit_clause(lexer: &mut Lexer) -> Result<LimitClause, FormatError> {
     lexer.expect_keyword("LIMIT")?;
     let token = lexer.next()?;
     let count = match token {
-        Token::Number(n) => n,
+        ParserToken::Number(n) => n,
         _ => return Err(FormatError::new("Expected number after LIMIT")),
     };
     Ok(LimitClause { count })
+}
+
+fn parse_expression_list(lexer: &mut Lexer) -> Result<Vec<Expression>, FormatError> {
+    let mut items = Vec::new();
+    
+    loop {
+        items.push(parse_expression(lexer)?);
+        
+        let token = lexer.peek()?;
+        if matches!(token, ParserToken::Symbol(s) if s == ",") {
+            lexer.next()?;
+        } else {
+            break;
+        }
+    }
+    
+    Ok(items)
+}
+
+fn parse_order_by_items(lexer: &mut Lexer) -> Result<Vec<OrderByItem>, FormatError> {
+    let mut items = Vec::new();
+    
+    loop {
+        let expr = parse_expression(lexer)?;
+        
+        let direction = if lexer.is_keyword("ASC")? {
+            lexer.expect_keyword("ASC")?;
+            Some(OrderDirection::Asc)
+        } else if lexer.is_keyword("DESC")? {
+            lexer.expect_keyword("DESC")?;
+            Some(OrderDirection::Desc)
+        } else {
+            None
+        };
+        
+        items.push(OrderByItem { expr, direction });
+        
+        let token = lexer.peek()?;
+        if matches!(token, ParserToken::Symbol(s) if s == ",") {
+            lexer.next()?;
+        } else {
+            break;
+        }
+    }
+    
+    Ok(items)
+}
+
+fn parse_window_frame_opt(lexer: &mut Lexer) -> Result<Option<WindowFrame>, FormatError> {
+    // Check for ROWS or RANGE
+    if !lexer.is_keyword("ROWS")? && !lexer.is_keyword("RANGE")? {
+        return Ok(None);
+    }
+    
+    let unit = if lexer.is_keyword("ROWS")? {
+        lexer.expect_keyword("ROWS")?;
+        "ROWS".to_string()
+    } else {
+        lexer.expect_keyword("RANGE")?;
+        "RANGE".to_string()
+    };
+    
+    // Check for optional BETWEEN keyword
+    let _has_between = if lexer.is_keyword("BETWEEN")? {
+        lexer.expect_keyword("BETWEEN")?;
+        true
+    } else {
+        false
+    };
+    
+    // Parse frame start
+    let start = parse_frame_bound(lexer)?;
+    
+    // Check for AND (frame end)
+    let end = if lexer.is_keyword("AND")? {
+        lexer.expect_keyword("AND")?;
+        Some(parse_frame_bound(lexer)?)
+    } else {
+        None
+    };
+    
+    Ok(Some(WindowFrame { unit, start, end }))
+}
+
+fn parse_frame_bound(lexer: &mut Lexer) -> Result<String, FormatError> {
+    if lexer.is_keyword("UNBOUNDED")? {
+        lexer.expect_keyword("UNBOUNDED")?;
+        if lexer.is_keyword("PRECEDING")? {
+            lexer.expect_keyword("PRECEDING")?;
+            Ok("UNBOUNDED PRECEDING".to_string())
+        } else {
+            lexer.expect_keyword("FOLLOWING")?;
+            Ok("UNBOUNDED FOLLOWING".to_string())
+        }
+    } else if lexer.is_keyword("CURRENT")? {
+        lexer.expect_keyword("CURRENT")?;
+        lexer.expect_keyword("ROW")?;
+        Ok("CURRENT ROW".to_string())
+    } else {
+        // N PRECEDING or N FOLLOWING
+        let token = lexer.next()?;
+        let n = match token {
+            ParserToken::Number(num) => num,
+            _ => return Err(FormatError::new("Expected number in frame bound")),
+        };
+        
+        if lexer.is_keyword("PRECEDING")? {
+            lexer.expect_keyword("PRECEDING")?;
+            Ok(format!("{} PRECEDING", n))
+        } else {
+            lexer.expect_keyword("FOLLOWING")?;
+            Ok(format!("{} FOLLOWING", n))
+        }
+    }
 }
 
 // Helper function to collect leading comments
@@ -1039,7 +1485,7 @@ fn parse_create_table(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> Resu
         });
         
         let token = lexer.peek()?;
-        if matches!(token, Token::Symbol(s) if s == ",") {
+        if matches!(token, ParserToken::Symbol(s) if s == ",") {
             lexer.next()?;
         } else {
             break;
@@ -1229,7 +1675,7 @@ fn parse_set_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> Res
     let mut key = parse_identifier(lexer)?;
     
     // Handle dotted identifiers
-    while lexer.peek()? == Token::Symbol(".".to_string()) {
+    while lexer.peek()? == ParserToken::Symbol(".".to_string()) {
         lexer.expect_symbol(".")?;
         key.push('.');
         key.push_str(&parse_identifier(lexer)?);
@@ -1240,9 +1686,9 @@ fn parse_set_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> Res
     // Value can be number or identifier
     let token = lexer.next()?;
     let value = match token {
-        Token::Word(w) => w,
-        Token::Number(n) => n,
-        Token::StringLiteral(s) => s,
+        ParserToken::Word(w) => w,
+        ParserToken::Number(n) => n,
+        ParserToken::StringLiteral(s) => s,
         _ => return Err(FormatError::new("Expected value after =")),
     };
     
@@ -1282,14 +1728,14 @@ fn parse_values_list(lexer: &mut Lexer) -> Result<Vec<Vec<String>>, FormatError>
             // Collect value as string (simplified - just collect tokens until , or ))
             let token = lexer.next()?;
             match token {
-                Token::Number(n) => row.push(n),
-                Token::StringLiteral(s) => row.push(s),  // Already includes quotes
-                Token::Word(w) => row.push(w),
+                ParserToken::Number(n) => row.push(n),
+                ParserToken::StringLiteral(s) => row.push(s),  // Already includes quotes
+                ParserToken::Word(w) => row.push(w),
                 _ => return Err(FormatError::new("Unexpected token in VALUES")),
             }
             
             let next = lexer.peek()?;
-            if matches!(next, Token::Symbol(s) if s == ",") {
+            if matches!(next, ParserToken::Symbol(s) if s == ",") {
                 lexer.next()?; // consume comma
             } else {
                 break;
@@ -1301,7 +1747,7 @@ fn parse_values_list(lexer: &mut Lexer) -> Result<Vec<Vec<String>>, FormatError>
         
         // Check for more rows
         let next = lexer.peek()?;
-        if matches!(next, Token::Symbol(s) if s == ",") {
+        if matches!(next, ParserToken::Symbol(s) if s == ",") {
             lexer.next()?; // consume comma
         } else {
             break;
@@ -1320,24 +1766,24 @@ fn parse_expression_as_string(lexer: &mut Lexer) -> Result<String, FormatError> 
         
         // Stop at comma (same level), WHERE, or EOF
         match &token {
-            Token::Symbol(s) if s == "," && paren_depth == 0 => break,
-            Token::Symbol(s) if s == "(" => paren_depth += 1,
-            Token::Symbol(s) if s == ")" => {
+            ParserToken::Symbol(s) if s == "," && paren_depth == 0 => break,
+            ParserToken::Symbol(s) if s == "(" => paren_depth += 1,
+            ParserToken::Symbol(s) if s == ")" => {
                 if paren_depth == 0 {
                     break;
                 }
                 paren_depth -= 1;
             },
-            Token::Word(w) if paren_depth == 0 && is_clause_keyword(&w.to_uppercase()) => break,
-            Token::Eof => break,
+            ParserToken::Word(w) if paren_depth == 0 && is_clause_keyword(&w.to_uppercase()) => break,
+            ParserToken::Eof => break,
             _ => {}
         }
         
         match lexer.next()? {
-            Token::Word(w) => parts.push(w),
-            Token::Symbol(s) => parts.push(s),
-            Token::Number(n) => parts.push(n),
-            Token::StringLiteral(s) => parts.push(s),  // Already includes quotes
+            ParserToken::Word(w) => parts.push(w),
+            ParserToken::Symbol(s) => parts.push(s),
+            ParserToken::Number(n) => parts.push(n),
+            ParserToken::StringLiteral(s) => parts.push(s),  // Already includes quotes
             _ => {}
         }
     }
@@ -1366,7 +1812,7 @@ fn parse_update_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> 
         assignments.push((col, val));
         
         let next = lexer.peek()?;
-        if matches!(next, Token::Symbol(s) if s == ",") {
+        if matches!(next, ParserToken::Symbol(s) if s == ",") {
             lexer.next()?;
         } else {
             break;
@@ -1407,8 +1853,8 @@ fn parse_alter_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> R
     let mut action_parts = Vec::new();
     loop {
         match lexer.peek()? {
-            Token::Eof => break,
-            Token::Word(w) => {
+            ParserToken::Eof => break,
+            ParserToken::Word(w) => {
                 let word = w.clone();
                 lexer.next()?;
                 // Only uppercase if it's a keyword, preserve identifier casing
@@ -1418,7 +1864,7 @@ fn parse_alter_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> R
                     action_parts.push(word);
                 }
             },
-            Token::Symbol(s) => {
+            ParserToken::Symbol(s) => {
                 let sym = s.clone();
                 lexer.next()?;
                 action_parts.push(sym);
@@ -1573,11 +2019,14 @@ fn parse_merge_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> R
             break;
         }
         match lexer.next()? {
-            Token::Word(w) => on_parts.push(w),
-            Token::Symbol(s) => on_parts.push(s),
-            Token::Number(n) => on_parts.push(n),
-            Token::StringLiteral(s) => on_parts.push(s),  // Already includes quotes
-            Token::Eof => break,
+            ParserToken::Word(w) => on_parts.push(w),
+            ParserToken::Symbol(s) => on_parts.push(s),
+            ParserToken::Number(n) => on_parts.push(n),
+            ParserToken::StringLiteral(s) => on_parts.push(s),  // Already includes quotes
+            ParserToken::QuotedIdentifier(s) => {
+                on_parts.push(format!("`{}`", s));
+            }
+            ParserToken::Eof => break,
         }
     }
     // Join without spaces - formatter will handle spacing
@@ -1604,11 +2053,11 @@ fn parse_merge_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> R
         let mut prev_was_keyword = true;  // Track if previous token was a keyword
         
         loop {
-            if lexer.is_keyword("WHEN")? || matches!(lexer.peek()?, Token::Eof) {
+            if lexer.is_keyword("WHEN")? || matches!(lexer.peek()?, ParserToken::Eof) {
                 break;
             }
             match lexer.next()? {
-                Token::Word(w) => {
+                ParserToken::Word(w) => {
                     let is_kw = crate::keywords::is_keyword(&w);
                     let word_str = if is_kw {
                         w.to_uppercase()
@@ -1623,15 +2072,15 @@ fn parse_merge_statement(lexer: &mut Lexer, leading_comments: Vec<Comment>) -> R
                     clause_parts.push(word_str);
                     prev_was_keyword = is_kw;
                 },
-                Token::Symbol(s) => {
+                ParserToken::Symbol(s) => {
                     clause_parts.push(s);
                     prev_was_keyword = false;
                 },
-                Token::Number(n) => {
+                ParserToken::Number(n) => {
                     clause_parts.push(n);
                     prev_was_keyword = false;
                 },
-                Token::StringLiteral(s) => {
+                ParserToken::StringLiteral(s) => {
                     clause_parts.push(s);
                     prev_was_keyword = false;
                 },
