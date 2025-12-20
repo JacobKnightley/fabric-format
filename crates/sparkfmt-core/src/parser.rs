@@ -615,6 +615,27 @@ fn parse_select_query(lexer: &mut Lexer, with_clause: Option<WithClause>) -> Res
         None
     };
     
+    // Spark-specific: CLUSTER BY clause
+    let cluster_by = if lexer.is_keyword("CLUSTER")? {
+        Some(parse_cluster_by_clause(lexer)?)
+    } else {
+        None
+    };
+    
+    // Spark-specific: DISTRIBUTE BY clause
+    let distribute_by = if lexer.is_keyword("DISTRIBUTE")? {
+        Some(parse_distribute_by_clause(lexer)?)
+    } else {
+        None
+    };
+    
+    // Spark-specific: SORT BY clause
+    let sort_by = if lexer.is_keyword("SORT")? {
+        Some(parse_sort_by_clause(lexer)?)
+    } else {
+        None
+    };
+    
     let limit = if lexer.is_keyword("LIMIT")? {
         Some(parse_limit_clause(lexer)?)
     } else {
@@ -646,6 +667,9 @@ fn parse_select_query(lexer: &mut Lexer, with_clause: Option<WithClause>) -> Res
         group_by,
         having,
         order_by,
+        cluster_by,
+        distribute_by,
+        sort_by,
         limit,
         leading_comments,
         hint_comment,
@@ -1524,7 +1548,10 @@ fn parse_table_ref(lexer: &mut Lexer) -> Result<TableRef, FormatError> {
                    !lexer.is_keyword("WHERE")? && 
                    !lexer.is_keyword("GROUP")? && !lexer.is_keyword("HAVING")? &&
                    !lexer.is_keyword("ORDER")? && !lexer.is_keyword("LIMIT")? &&
-                   !lexer.is_keyword("UNION")? {
+                   !lexer.is_keyword("UNION")? &&
+                   !lexer.is_keyword("CLUSTER")? &&     // Spark-specific
+                   !lexer.is_keyword("DISTRIBUTE")? &&  // Spark-specific
+                   !lexer.is_keyword("SORT")? {         // Spark-specific
                     Some(lexer.parse_identifier()?)
                 } else {
                     None
@@ -1908,6 +1935,84 @@ fn parse_order_by_clause(lexer: &mut Lexer) -> Result<OrderByClause, FormatError
     }
     
     Ok(OrderByClause { items })
+}
+
+/// Parse CLUSTER BY clause (Spark-specific)
+/// CLUSTER BY distributes and sorts data within partitions by the specified columns
+fn parse_cluster_by_clause(lexer: &mut Lexer) -> Result<ClusterByClause, FormatError> {
+    lexer.expect_keyword("CLUSTER")?;
+    lexer.expect_keyword("BY")?;
+    
+    let mut items = Vec::new();
+    
+    loop {
+        items.push(parse_expression(lexer)?);
+        
+        let token = lexer.peek()?;
+        if matches!(token, ParserToken::Symbol(s) if s == ",") {
+            lexer.next()?;
+        } else {
+            break;
+        }
+    }
+    
+    Ok(ClusterByClause { items })
+}
+
+/// Parse DISTRIBUTE BY clause (Spark-specific)
+/// DISTRIBUTE BY distributes data across partitions without sorting
+fn parse_distribute_by_clause(lexer: &mut Lexer) -> Result<DistributeByClause, FormatError> {
+    lexer.expect_keyword("DISTRIBUTE")?;
+    lexer.expect_keyword("BY")?;
+    
+    let mut items = Vec::new();
+    
+    loop {
+        items.push(parse_expression(lexer)?);
+        
+        let token = lexer.peek()?;
+        if matches!(token, ParserToken::Symbol(s) if s == ",") {
+            lexer.next()?;
+        } else {
+            break;
+        }
+    }
+    
+    Ok(DistributeByClause { items })
+}
+
+/// Parse SORT BY clause (Spark-specific)
+/// SORT BY sorts data within each partition
+fn parse_sort_by_clause(lexer: &mut Lexer) -> Result<SortByClause, FormatError> {
+    lexer.expect_keyword("SORT")?;
+    lexer.expect_keyword("BY")?;
+    
+    let mut items = Vec::new();
+    
+    loop {
+        let expr = parse_expression(lexer)?;
+        
+        let direction = if lexer.is_keyword("ASC")? {
+            lexer.expect_keyword("ASC")?;
+            Some(OrderDirection::Asc)
+        } else if lexer.is_keyword("DESC")? {
+            lexer.expect_keyword("DESC")?;
+            Some(OrderDirection::Desc)
+        } else {
+            None
+        };
+        
+        items.push(OrderByItem { expr, direction });
+        
+        let token = lexer.peek()?;
+        if matches!(token, ParserToken::Symbol(s) if s == ",") {
+            lexer.next()?;
+        } else {
+            break;
+        }
+    }
+    
+    Ok(SortByClause { items })
 }
 
 fn parse_limit_clause(lexer: &mut Lexer) -> Result<LimitClause, FormatError> {

@@ -12,6 +12,10 @@ pub mod build_generated;
 // ANTLR-generated parser code
 pub mod generated;
 
+// ANTLR parser wrapper and AST converter (for future ANTLR integration)
+pub mod antlr_parser;
+pub mod ast_converter;
+
 // ANTLR predicate implementations
 pub mod antlr_predicates;
 pub mod antlr4rust_workarounds;

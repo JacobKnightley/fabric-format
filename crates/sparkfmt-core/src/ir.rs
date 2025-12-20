@@ -144,6 +144,9 @@ pub struct SelectQuery {
     pub group_by: Option<GroupByClause>,
     pub having: Option<HavingClause>,
     pub order_by: Option<OrderByClause>,
+    pub cluster_by: Option<ClusterByClause>,     // Spark-specific
+    pub distribute_by: Option<DistributeByClause>, // Spark-specific
+    pub sort_by: Option<SortByClause>,           // Spark-specific
     pub limit: Option<LimitClause>,
     pub leading_comments: Vec<Comment>,
     pub hint_comment: Option<String>, // Query hint: /*+ ... */
@@ -400,6 +403,27 @@ pub struct OrderByItem {
 pub enum OrderDirection {
     Asc,
     Desc,
+}
+
+/// CLUSTER BY clause (Spark-specific)
+/// Distributes and sorts data within partitions
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClusterByClause {
+    pub items: Vec<Expression>,
+}
+
+/// DISTRIBUTE BY clause (Spark-specific)
+/// Distributes data across partitions without sorting
+#[derive(Debug, Clone, PartialEq)]
+pub struct DistributeByClause {
+    pub items: Vec<Expression>,
+}
+
+/// SORT BY clause (Spark-specific)
+/// Sorts data within each partition
+#[derive(Debug, Clone, PartialEq)]
+pub struct SortByClause {
+    pub items: Vec<OrderByItem>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
