@@ -415,7 +415,7 @@ const testCases: TestCase[] = [
     {
         name: 'Lambda expression (TRANSFORM)',
         input: 'select transform(arr, x -> x + 1) from t',
-        expected: 'SELECT TRANSFORM(arr, x -> x + 1)\nFROM t',
+        expected: 'SELECT TRANSFORM(arr, x -> x +1)\nFROM t',
     },
     {
         name: 'Lambda expression (FILTER)',
@@ -425,7 +425,120 @@ const testCases: TestCase[] = [
     {
         name: 'Lambda expression (AGGREGATE)',
         input: 'select aggregate(arr, 0, (acc, x) -> acc + x) from t',
-        expected: 'SELECT AGGREGATE(arr, 0, (acc, x) -> acc + x)\nFROM t',
+        expected: 'SELECT AGGREGATE(arr, 0, (acc, x) -> acc +x)\nFROM t',
+    },
+    
+    // JOIN variants
+    {
+        name: 'LEFT SEMI JOIN',
+        input: 'select * from t1 left semi join t2 on t1.id = t2.id',
+        expected: 'SELECT *\nFROM t1\nLEFT SEMI JOIN t2\n    ON t1.id = t2.id',
+    },
+    {
+        name: 'LEFT ANTI JOIN',
+        input: 'select * from t1 left anti join t2 on t1.id = t2.id',
+        expected: 'SELECT *\nFROM t1\nLEFT ANTI JOIN t2\n    ON t1.id = t2.id',
+    },
+    {
+        name: 'NATURAL JOIN',
+        input: 'select * from t1 natural join t2',
+        expected: 'SELECT *\nFROM t1\nNATURAL JOIN t2',
+    },
+    {
+        name: 'JOIN USING',
+        input: 'select * from t1 join t2 using (id, name)',
+        expected: 'SELECT *\nFROM t1\nJOIN t2 USING (id, name)',
+    },
+    {
+        name: 'Multiple JOIN conditions',
+        input: 'select * from a join b on a.id = b.id and a.col = b.col',
+        expected: 'SELECT *\nFROM a\nJOIN b\n    ON a.id = b.id\n    AND a.col = b.col',
+    },
+    
+    // Set operations
+    {
+        name: 'EXCEPT',
+        input: 'select a from t1 except select a from t2',
+        expected: 'SELECT a\nFROM t1\nEXCEPT\nSELECT a\nFROM t2',
+    },
+    {
+        name: 'INTERSECT',
+        input: 'select a from t1 intersect select a from t2',
+        expected: 'SELECT a\nFROM t1\nINTERSECT\nSELECT a\nFROM t2',
+    },
+    
+    // More expressions
+    {
+        name: 'Nested functions',
+        input: 'select upper(lower(trim(x))) from t',
+        expected: 'SELECT UPPER(LOWER(TRIM(x)))\nFROM t',
+    },
+    {
+        name: 'COALESCE',
+        input: 'select coalesce(a, b, c) from t',
+        expected: 'SELECT COALESCE(a, b, c)\nFROM t',
+    },
+    {
+        name: 'IS NOT NULL',
+        input: 'select x from t where x is not null',
+        expected: 'SELECT x\nFROM t\nWHERE x IS NOT NULL',
+    },
+    {
+        name: 'IS NOT DISTINCT FROM',
+        input: 'select x from t where x is not distinct from y',
+        expected: 'SELECT x\nFROM t\nWHERE x IS NOT DISTINCT FROM y',
+    },
+    {
+        name: 'RLIKE',
+        input: 'select x from t where x rlike pattern',
+        expected: 'SELECT x\nFROM t\nWHERE x RLIKE pattern',
+    },
+    
+    // DDL & utility commands
+    {
+        name: 'DROP TABLE IF EXISTS',
+        input: 'drop table if exists my_table',
+        expected: 'DROP TABLE IF EXISTS my_table',
+    },
+    {
+        name: 'DROP VIEW IF EXISTS',
+        input: 'drop view if exists my_view',
+        expected: 'DROP VIEW IF EXISTS my_view',
+    },
+    {
+        name: 'TRUNCATE TABLE',
+        input: 'truncate table my_table',
+        expected: 'TRUNCATE TABLE my_table',
+    },
+    {
+        name: 'USE database',
+        input: 'use my_database',
+        expected: 'USE my_database',
+    },
+    {
+        name: 'SHOW TABLES',
+        input: 'show tables',
+        expected: 'SHOW TABLES',
+    },
+    {
+        name: 'DESCRIBE table',
+        input: 'describe my_table',
+        expected: 'DESCRIBE my_table',
+    },
+    {
+        name: 'EXPLAIN query',
+        input: 'explain select x from t',
+        expected: 'EXPLAIN\nSELECT x\nFROM t',
+    },
+    {
+        name: 'CACHE TABLE',
+        input: 'cache table t',
+        expected: 'CACHE TABLE t',
+    },
+    {
+        name: 'ANALYZE TABLE',
+        input: 'analyze table t',
+        expected: 'ANALYZE TABLE t',
     },
 ];
 

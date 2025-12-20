@@ -1221,6 +1221,11 @@ export function formatSql(sql: string): string {
                 const isDoubleColon = text === '::' || lastChar === ':' && lastStr.endsWith('::');
                 const prevIsDoubleColon = lastStr.endsWith('::');
                 
+                // Unary operators: no space after - or + when in unary position
+                // Unary position: after (, ,, or at start of expression context
+                const prevIsUnaryOperator = (lastChar === '-' || lastChar === '+') && 
+                    (lastStr.length === 1 || /[(\[,]$/.test(lastStr.slice(0, -1)) || lastStr.endsWith(' -') || lastStr.endsWith(' +') || lastStr.endsWith('\n-') || lastStr.endsWith('\n+'));
+                
                 // Skip space in certain cases
                 const skipSpace = lastChar === '(' || lastChar === '.' || lastChar === '\n' ||
                     text === ')' || text === '.' ||
@@ -1228,7 +1233,8 @@ export function formatSql(sql: string): string {
                     (text === '(' && (prevWasFunctionName || prevWasBuiltInFunctionKeyword)) || // No space before ( after function
                     (text === ',' && insideParens > 0) || // No space before comma inside parens
                     justOutputCommaFirstStyle || // No space after comma in comma-first style
-                    afterWhereKeyword || afterHavingKeyword; // No space before first condition in multiline WHERE/HAVING
+                    afterWhereKeyword || afterHavingKeyword || // No space before first condition in multiline WHERE/HAVING
+                    prevIsUnaryOperator; // No space after unary - or +
                     
                 // Add comma-space: space after comma inside parens (unless comma-first)
                 const needsCommaSpace = lastChar === ',' && insideParens > 0 && !justOutputCommaFirstStyle;
