@@ -2,6 +2,79 @@
 
 > **THIS IS A NON-NEGOTIABLE REFACTOR. DO NOT DEVIATE FROM THIS PLAN.**
 
+---
+
+## Agent Execution Model (CRITICAL)
+
+> **PRIMARY AGENT = ORCHESTRATOR ONLY. DO NOT IMPLEMENT DIRECTLY.**
+
+### Delegation Requirements
+
+The primary agent **MUST NOT** directly implement any of the tasks in this document. Instead:
+
+1. **Use Sub-Agents for All Implementation**
+   - Each TASK section (1-7) should be delegated to a sub-agent
+   - Sub-agents perform the actual code writing, file creation, and file deletion
+   - Sub-agents run tests and report results back
+
+2. **Primary Agent Responsibilities**
+   - Read and understand this refactor plan
+   - Break down tasks into clear sub-agent prompts
+   - Launch sub-agents with detailed, self-contained instructions
+   - Review sub-agent results for correctness
+   - Coordinate dependencies between tasks
+   - Perform final verification with the user
+
+3. **Sub-Agent Prompt Requirements**
+   - Include ALL relevant context (file paths, constraints, code snippets)
+   - Specify exact success criteria
+   - Include the "NO SILENT DROPS" constraint in every prompt
+   - Request explicit confirmation of completion
+
+4. **Orchestration Flow**
+   ```
+   Primary Agent (You)
+        │
+        ├─► Sub-Agent: TASK 1 (antlr_parser.rs)
+        │        └─► Reports: "Created, compiles, tests X pass"
+        │
+        ├─► Sub-Agent: TASK 2 (ast_converter.rs)
+        │        └─► Reports: "Created, handles N grammar rules"
+        │
+        ├─► Sub-Agent: TASK 3 (Delete old files)
+        │        └─► Reports: "Deleted 4 files, build still passes"
+        │
+        ├─► Sub-Agent: TASK 4 (Wire formatter.rs)
+        │        └─► Reports: "Integrated, existing tests pass"
+        │
+        ├─► Sub-Agent: TASK 5 (Comment handling)
+        │        └─► Reports: "Comments preserved, anchoring works"
+        │
+        ├─► Sub-Agent: TASK 6 (Update lib.rs)
+        │        └─► Reports: "Module exports updated"
+        │
+        ├─► Sub-Agent: TASK 7 (Fix all tests)
+        │        └─► Reports: "All tests pass including new ones"
+        │
+        └─► Primary Agent: Final verification with user
+   ```
+
+5. **Final Verification (Primary Agent + User)**
+   - Run full test suite: `cargo test`
+   - Run WASM build: `cargo build --target wasm32-unknown-unknown -p sparkfmt-wasm`
+   - Walk through verification checklist together
+   - Confirm no hand-coded lists remain
+   - Confirm no silent drop patterns exist
+
+### Why This Matters
+
+- Sub-agents can focus deeply on one task without context overflow
+- Primary agent maintains full picture and catches integration issues
+- User gets clean orchestration and final sign-off opportunity
+- Failures are isolated and easier to debug
+
+---
+
 ## Executive Mandate
 
 Replace the hand-written parser with the ANTLR-generated parser. The Apache Spark grammar files (`SqlBaseLexer.g4`, `SqlBaseParser.g4`) are the **SINGLE SOURCE OF TRUTH**.
@@ -35,6 +108,8 @@ These files exist and work:
 ---
 
 ## TASK 1: Create ANTLR Parser Wrapper
+
+> **🤖 DELEGATE TO SUB-AGENT** - Provide this entire section as context.
 
 **File:** `src/antlr_parser.rs`
 
@@ -103,6 +178,8 @@ pub fn extract_comments(token_stream: &CommonTokenStream) -> Vec<Comment> {
 ---
 
 ## TASK 2: Create AST Converter
+
+> **🤖 DELEGATE TO SUB-AGENT** - This is the largest task. Include grammar construct table.
 
 **File:** `src/ast_converter.rs`
 
@@ -207,6 +284,8 @@ fn handle_unknown(&mut self, ctx: &dyn Context) -> Result<(), FormatError> {
 
 ## TASK 3: Delete Hand-Coded Files
 
+> **🤖 DELEGATE TO SUB-AGENT** - Only after Tasks 1-2 confirmed working.
+
 **MANDATORY DELETIONS after Tasks 1-2 are complete:**
 
 | File | Action | Reason |
@@ -228,6 +307,8 @@ fn handle_unknown(&mut self, ctx: &dyn Context) -> Result<(), FormatError> {
 ---
 
 ## TASK 4: Wire Up Formatter
+
+> **🤖 DELEGATE TO SUB-AGENT** - Depends on Tasks 1-3 completion.
 
 **File:** `src/formatter.rs`
 
@@ -272,6 +353,8 @@ pub fn format(input: &str) -> Result<String, FormatError> {
 
 ## TASK 5: Comment Handling
 
+> **🤖 DELEGATE TO SUB-AGENT** - Include anchoring rules from copilot-instructions.md.
+
 **REQUIRED Implementation:**
 
 ```rust
@@ -308,6 +391,8 @@ pub fn attach_comments(query: &mut Query, comments: Vec<Comment>) -> Result<(), 
 
 ## TASK 6: Update lib.rs
 
+> **🤖 DELEGATE TO SUB-AGENT** - Quick task, can combine with Task 3 or 4.
+
 **REQUIRED Changes:**
 
 ```rust
@@ -334,6 +419,8 @@ pub mod generated;
 ---
 
 ## TASK 7: Fix All Tests
+
+> **🤖 DELEGATE TO SUB-AGENT** - Final validation. Sub-agent should run `cargo test` and report all results.
 
 **REQUIRED Outcomes:**
 
@@ -477,6 +564,10 @@ Output SQL String
 - [ ] All join types work: LEFT SEMI, LEFT ANTI, NATURAL
 - [ ] Comments are preserved in correct positions
 - [ ] WASM build succeeds: `cargo build --target wasm32-unknown-unknown -p sparkfmt-wasm`
+
+**ORCHESTRATION CHECKPOINT:**
+> Primary agent: DO NOT check these boxes yourself. Walk through each item WITH THE USER.
+> Run the verification commands, show the output, and get explicit user confirmation.
 
 ---
 
