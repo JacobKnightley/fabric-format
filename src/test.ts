@@ -162,7 +162,7 @@ const testCases: TestCase[] = [
     {
         name: 'UDF preserves casing',
         input: 'select MyCustomFunc(x), my_udf(a,b) from t',
-        expected: 'SELECT\n     MyCustomFunc(x)\n    ,MY_UDF(a,b)\nFROM t',
+        expected: 'SELECT\n     MyCustomFunc(x)\n    ,my_udf(a,b)\nFROM t',
     },
     {
         name: 'Mixed built-in and UDF',

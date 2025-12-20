@@ -3,10 +3,11 @@
  * 
  * NO HARDCODED KEYWORD, FUNCTION, OR CLAUSE LISTS.
  * Everything derived from ANTLR lexer symbolicNames and parse tree context.
+ * Built-in function list is auto-generated from Spark's source at build time.
  * 
  * Rules:
  * - Token in identifier context (not function) → preserve original casing
- * - Token in function call context → uppercase
+ * - Token in function call context → uppercase if built-in, preserve if UDF
  * - Token is keyword (symbolicName === text) → uppercase
  * - Newlines before clause-starting tokens (from parse tree structure)
  */
@@ -17,6 +18,8 @@ import SqlBaseLexer from './generated/SqlBaseLexer.js';
 import SqlBaseParser from './generated/SqlBaseParser.js';
 // @ts-ignore
 import SqlBaseParserVisitor from './generated/SqlBaseParserVisitor.js';
+// Auto-generated from Spark source - the authoritative list of built-in functions
+import { SPARK_BUILTIN_FUNCTIONS } from './generated/builtinFunctions.js';
 
 /**
  * Build a map from symbolic name to token type (derived from grammar at runtime)
@@ -607,23 +610,17 @@ export function formatSql(sql: string): string {
             let outputText: string;
             
             if (isFunctionCall) {
-                // Check if it's a built-in function (keyword) or UDF
-                const isBuiltIn = isKeywordToken(tokenType, text);
-                if (isBuiltIn) {
-                    // Built-in function defined as keyword (CAST, IF, etc.) → uppercase
+                // Check if it's a built-in function using the authoritative list from Spark source
+                const funcLower = text.toLowerCase();
+                const isBuiltInFromList = SPARK_BUILTIN_FUNCTIONS.has(funcLower);
+                const isBuiltInKeyword = isKeywordToken(tokenType, text);
+                
+                if (isBuiltInFromList || isBuiltInKeyword) {
+                    // Built-in function → uppercase
                     outputText = text.toUpperCase();
                 } else {
-                    // Identifier token - apply heuristic to distinguish built-in from UDF
-                    // Mixed case indicates UDF (MyCustomFunc) → preserve
-                    // All lowercase/uppercase (including with underscores) → uppercase as built-in
-                    const hasMixedCase = text !== text.toLowerCase() && text !== text.toUpperCase();
-                    if (hasMixedCase) {
-                        // UDF with mixed case → preserve original casing
-                        outputText = text;
-                    } else {
-                        // Built-in function (count, sum, row_number, etc.) → uppercase
-                        outputText = text.toUpperCase();
-                    }
+                    // Not in built-in list → UDF, preserve original casing
+                    outputText = text;
                 }
             } else if (isInIdentifierContext) {
                 // Identifier → preserve original casing
