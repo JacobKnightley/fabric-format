@@ -886,7 +886,9 @@ fn parse_comparison_expression(lexer: &mut Lexer) -> Result<Expression, FormatEr
     
     // Standard comparison operators
     let token = lexer.peek()?;
-    if matches!(token, ParserToken::Symbol(s) if matches!(s.as_str(), "=" | "<" | ">" | "<=" | ">=" | "<>" | "!=")) {
+    if matches!(token, ParserToken::Symbol(s) if matches!(s.as_str(), 
+        "=" | "<" | ">" | "<=" | ">=" | "<>" | "!=" | "<=>" | "==" | 
+        "!<" | "!>")) {
         let op = match lexer.next()? {
             ParserToken::Symbol(s) => s,
             _ => unreachable!(),
@@ -911,7 +913,9 @@ fn parse_additive_expression(lexer: &mut Lexer) -> Result<Expression, FormatErro
     
     loop {
         let token = lexer.peek()?;
-        if matches!(token, ParserToken::Symbol(s) if s == "+" || s == "-") {
+        // Handle additive, bitwise, shift, and concat operators
+        if matches!(token, ParserToken::Symbol(s) if matches!(s.as_str(),
+            "+" | "-" | "|" | "||" | "&" | "^" | "<<" | ">>" | ">>>" | "|>")) {
             let op = match lexer.next()? {
                 ParserToken::Symbol(s) => s,
                 _ => unreachable!(),
@@ -935,7 +939,8 @@ fn parse_multiplicative_expression(lexer: &mut Lexer) -> Result<Expression, Form
     
     loop {
         let token = lexer.peek()?;
-        if matches!(token, ParserToken::Symbol(s) if s == "*" || s == "/") {
+        if matches!(token, ParserToken::Symbol(s) if matches!(s.as_str(), 
+            "*" | "/" | "%")) {
             let op = match lexer.next()? {
                 ParserToken::Symbol(s) => s,
                 _ => unreachable!(),
@@ -998,6 +1003,26 @@ fn parse_postfix_expression(lexer: &mut Lexer) -> Result<Expression, FormatError
                     expr: Box::new(expr),
                     data_type,
                     pg_style: true,
+                };
+            }
+            ParserToken::Symbol(s) if s == "->" => {
+                // Arrow operator for struct/map access or lambda
+                lexer.next()?;
+                let field = parse_identifier(lexer)?;
+                expr = Expression::BinaryOp {
+                    left: Box::new(expr),
+                    op: "->".to_string(),
+                    right: Box::new(Expression::Identifier(field)),
+                };
+            }
+            ParserToken::Symbol(s) if s == ":" => {
+                // Semi-structured field access: expr:field
+                lexer.next()?;
+                let field = parse_identifier(lexer)?;
+                expr = Expression::BinaryOp {
+                    left: Box::new(expr),
+                    op: ":".to_string(),
+                    right: Box::new(Expression::Identifier(field)),
                 };
             }
             ParserToken::Word(w) if w.eq_ignore_ascii_case("OVER") => {
@@ -1181,7 +1206,30 @@ fn parse_primary_expression(lexer: &mut Lexer) -> Result<Expression, FormatError
                 let token = lexer.peek()?;
                 if !matches!(token, ParserToken::Symbol(s) if s == ")") {
                     loop {
-                        args.push(parse_expression(lexer)?);
+                        // Try to parse as named argument (param => value)
+                        let expr = parse_expression(lexer)?;
+                        
+                        // Check if this is a named argument
+                        let token = lexer.peek()?;
+                        if matches!(token, ParserToken::Symbol(s) if s == "=>") {
+                            // This is a named argument
+                            // The expr should be an identifier
+                            let param_name = match expr {
+                                Expression::Identifier(id) => id,
+                                _ => return Err(FormatError::new("Expected parameter name before =>".to_string())),
+                            };
+                            lexer.next()?; // consume =>
+                            let value = parse_expression(lexer)?;
+                            // Represent named argument as a binary op for now
+                            args.push(Expression::BinaryOp {
+                                left: Box::new(Expression::Identifier(param_name)),
+                                op: "=>".to_string(),
+                                right: Box::new(value),
+                            });
+                        } else {
+                            // Regular positional argument
+                            args.push(expr);
+                        }
                         
                         let token = lexer.peek()?;
                         if matches!(token, ParserToken::Symbol(s) if s == ",") {
