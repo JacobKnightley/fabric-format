@@ -43,13 +43,26 @@ function getTokenType(name: string): number {
  * Check if a token is a keyword by comparing its symbolic name to its text.
  * Keywords in ANTLR are defined like: SELECT: 'SELECT';
  * So symbolicNames[tokenType] === tokenText for keywords.
+ * 
+ * Special case: Some keywords have aliases (e.g., TEMPORARY: 'TEMPORARY' | 'TEMP')
+ * In these cases, symbolicName won't match text, but it's still a keyword.
+ * We detect this by checking if the token has a non-identifier symbolic name.
  */
 function isKeywordToken(tokenType: number, tokenText: string): boolean {
     const symbolicName = SqlBaseLexer.symbolicNames[tokenType];
-    // A keyword's symbolic name matches its uppercase text
-    return symbolicName !== null && 
-           symbolicName !== undefined && 
-           symbolicName === tokenText.toUpperCase();
+    if (!symbolicName) return false;
+    
+    // Direct match: symbolic name equals uppercase text (e.g., SELECT)
+    if (symbolicName === tokenText.toUpperCase()) return true;
+    
+    // Alias match: token has a keyword symbolic name but different text (e.g., TEMP -> TEMPORARY)
+    // If it's not an identifier/literal and has a symbolic name, it's a keyword
+    const nonKeywordTypes = new Set(['IDENTIFIER', 'STRING', 'STRING_LITERAL', 'BIGINT_LITERAL', 'SMALLINT_LITERAL',
+        'TINYINT_LITERAL', 'INTEGER_VALUE', 'EXPONENT_VALUE', 'DECIMAL_VALUE', 'FLOAT_LITERAL',
+        'DOUBLE_LITERAL', 'BIGDECIMAL_LITERAL', 'BACKQUOTED_IDENTIFIER', 'SIMPLE_COMMENT',
+        'BRACKETED_COMMENT', 'WS', 'UNRECOGNIZED']);
+    
+    return !nonKeywordTypes.has(symbolicName);
 }
 
 /**
@@ -71,6 +84,9 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
     // Track first item in each list context
     listFirstItems: Set<number> = new Set();
     
+    // Track clauses that have multiple items (need multiline formatting)
+    multiItemClauses: Set<number> = new Set();
+    
     // Track condition operators (AND/OR) in WHERE/HAVING
     conditionOperators: Set<number> = new Set();
     
@@ -85,6 +101,34 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
     // Set of alias token indices that need AS inserted before them
     aliasInsertPositions: Set<number> = new Set();
     
+    // Track BETWEEN contexts to suppress AND splitting
+    betweenAndTokens: Set<number> = new Set();
+    
+    // Track ON tokens that should get newline+indent (JOINs)
+    joinOnTokens: Set<number> = new Set();
+    
+    // Track CTE/subquery parentheses for indentation
+    subqueryOpenParens: Set<number> = new Set();
+    subqueryCloseParens: Set<number> = new Set();
+    
+    // Track CTE commas for comma-first formatting
+    cteCommas: Set<number> = new Set();
+    
+    // Track DDL column list commas (CREATE TABLE)
+    ddlColumnCommas: Set<number> = new Set();
+    ddlOpenParens: Set<number> = new Set();
+    ddlCloseParens: Set<number> = new Set();
+    ddlFirstColumn: Set<number> = new Set();
+    ddlMultiColumn: Set<number> = new Set(); // DDL parens with multiple columns
+    
+    // Track DML contexts
+    valuesCommas: Set<number> = new Set();
+    setClauseCommas: Set<number> = new Set();
+    setKeywordToken: number = -1;
+    
+    // Track current SELECT token for associating with list items
+    private currentSelectToken: number = -1;
+
     visit(ctx: any): any {
         if (!ctx) return null;
         return this.visitChildren(ctx);
@@ -148,6 +192,25 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
         return this.visitChildren(ctx);
     }
     
+    visitLateralView(ctx: any): any {
+        // LATERAL VIEW explode(...) - mark the function name as function call
+        // Grammar: LATERAL VIEW (OUTER)? qualifiedName LEFT_PAREN ...
+        if (ctx.children) {
+            for (let i = 0; i < ctx.children.length; i++) {
+                const child = ctx.children[i];
+                // Find qualifiedName (the function name like 'explode')
+                if (child.ruleIndex !== undefined) {
+                    const ruleName = SqlBaseParser.ruleNames[child.ruleIndex];
+                    if (ruleName === 'qualifiedName' && child.start) {
+                        this.functionCallTokens.add(child.start.tokenIndex);
+                        break;
+                    }
+                }
+            }
+        }
+        return this.visitChildren(ctx);
+    }
+    
     // ========== CLAUSE-STARTING CONTEXTS ==========
     // Grammar rules for clauses that should start on new lines
     
@@ -160,7 +223,10 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
         // GROUP BY clause
         this._markClauseStart(ctx);
         // Mark commas in GROUP BY list
-        this._markCommasAtLevel(ctx);
+        const commaCount = this._markCommasAtLevel(ctx);
+        if (commaCount > 0 && ctx.start) {
+            this.multiItemClauses.add(ctx.start.tokenIndex);
+        }
         return this.visitChildren(ctx);
     }
     
@@ -168,12 +234,14 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
         // ORDER BY, LIMIT, etc. - scan children for specific tokens
         // Mark ORDER token and LIMIT token separately
         // Also track ORDER BY list commas
+        let orderTokenIndex: number | null = null;
         if (ctx.children) {
             for (const child of ctx.children) {
                 if (child.symbol) {
                     const symName = SqlBaseLexer.symbolicNames[child.symbol.type];
                     if (symName === 'ORDER') {
                         this.clauseStartTokens.add(child.symbol.tokenIndex);
+                        orderTokenIndex = child.symbol.tokenIndex;
                     } else if (symName === 'LIMIT') {
                         this.clauseStartTokens.add(child.symbol.tokenIndex);
                     }
@@ -181,7 +249,10 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
             }
         }
         // Mark commas in ORDER BY list
-        this._markCommasAtLevel(ctx);
+        const commaCount = this._markCommasAtLevel(ctx);
+        if (commaCount > 0 && orderTokenIndex !== null) {
+            this.multiItemClauses.add(orderTokenIndex);
+        }
         return this.visitChildren(ctx);
     }
     
@@ -200,6 +271,11 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
         this._markClauseStart(ctx);
         // Check if JOIN has multiple conditions (AND/OR)
         this._analyzeJoinConditions(ctx);
+        // Always mark ON token for newline+indent in JOINs
+        const onTokenIndex = this._findOnToken(ctx);
+        if (onTokenIndex !== -1) {
+            this.joinOnTokens.add(onTokenIndex);
+        }
         return this.visitChildren(ctx);
     }
     
@@ -233,17 +309,9 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
     }
     
     visitWindowDef(ctx: any): any {
-        // Window definition - mark ORDER BY token inside OVER clause
-        if (ctx.children) {
-            for (const child of ctx.children) {
-                if (child.symbol) {
-                    const symName = SqlBaseLexer.symbolicNames[child.symbol.type];
-                    if (symName === 'ORDER') {
-                        this.clauseStartTokens.add(child.symbol.tokenIndex);
-                    }
-                }
-            }
-        }
+        // Window definition - OVER (PARTITION BY ... ORDER BY ...)
+        // Do NOT mark ORDER BY as clause start here - it should stay inline
+        // Just visit children without marking anything
         return this.visitChildren(ctx);
     }
     
@@ -265,6 +333,10 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
     visitSelectClause(ctx: any): any {
         // SELECT keyword - new line for nested/union SELECTs
         this._markClauseStart(ctx);
+        // Save SELECT token for associating with list item count
+        if (ctx.start) {
+            this.currentSelectToken = ctx.start.tokenIndex;
+        }
         return this.visitChildren(ctx);
     }
     
@@ -299,7 +371,11 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
     
     visitNamedExpressionSeq(ctx: any): any {
         // SELECT column list
-        this._markListContext(ctx);
+        const hasMultiple = this._markListContext(ctx);
+        if (hasMultiple && this.currentSelectToken >= 0) {
+            // Mark the SELECT token as having multiple items
+            this.multiItemClauses.add(this.currentSelectToken);
+        }
         return this.visitChildren(ctx);
     }
     
@@ -308,37 +384,302 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
         return this.visitChildren(ctx);
     }
     
-    private _markCommasAtLevel(ctx: any): void {
+    private _markCommasAtLevel(ctx: any): number {
         // Mark commas at this level and recursively in children
-        if (!ctx || !ctx.children) return;
+        // Returns count of commas found
+        let count = 0;
+        if (!ctx || !ctx.children) return 0;
         for (const child of ctx.children) {
             if (child.symbol) {
                 if (child.symbol.type === getTokenType('COMMA')) {
                     this.listItemCommas.add(child.symbol.tokenIndex);
+                    count++;
                 }
             } else if (child.ruleIndex !== undefined) {
                 // Recurse into rule contexts
-                this._markCommasAtLevel(child);
+                count += this._markCommasAtLevel(child);
             }
         }
+        return count;
     }
     
     // ========== CONDITION CONTEXTS (WHERE/HAVING) ==========
     
     visitWhereClause(ctx: any): any {
         this._markClauseStart(ctx);
-        // Check if this WHERE has multiple conditions
+        // First, scan for BETWEEN AND tokens to exclude them from condition operators
+        this._scanForBetweenAnd(ctx);
+        // Then check if this WHERE has multiple conditions
         this._analyzeConditionClause(ctx);
         return this.visitChildren(ctx);
     }
     
     visitHavingClause(ctx: any): any {
         this._markClauseStart(ctx);
-        // Check if this HAVING has multiple conditions
+        // First, scan for BETWEEN AND tokens to exclude them from condition operators
+        this._scanForBetweenAnd(ctx);
+        // Then check if this HAVING has multiple conditions
         this._analyzeConditionClause(ctx);
         return this.visitChildren(ctx);
     }
     
+    private _scanForBetweenAnd(ctx: any): void {
+        // Recursively scan for BETWEEN ... AND patterns and mark the AND tokens
+        if (!ctx) return;
+        if (ctx.children) {
+            let hasBetween = false;
+            for (const child of ctx.children) {
+                if (child.symbol) {
+                    const symName = SqlBaseLexer.symbolicNames[child.symbol.type];
+                    if (symName === 'BETWEEN') {
+                        hasBetween = true;
+                    } else if (symName === 'AND' && hasBetween) {
+                        this.betweenAndTokens.add(child.symbol.tokenIndex);
+                        hasBetween = false; // Reset for next BETWEEN
+                    }
+                }
+                // Recurse into children
+                this._scanForBetweenAnd(child);
+            }
+        }
+    }
+
+    // ========== BETWEEN - Detect AND tokens inside BETWEEN expressions ==========
+    
+    visitPredicate(ctx: any): any {
+        // Check if this is a BETWEEN predicate: expr BETWEEN expr AND expr
+        // We need to mark the AND token so it's not treated as a condition separator
+        // Also check for IN (subquery) predicates
+        if (ctx.children) {
+            let hasBetween = false;
+            let hasQuery = false;
+            for (const child of ctx.children) {
+                if (child.symbol) {
+                    const symName = SqlBaseLexer.symbolicNames[child.symbol.type];
+                    if (symName === 'BETWEEN') {
+                        hasBetween = true;
+                    } else if (symName === 'AND' && hasBetween) {
+                        // This AND is part of BETWEEN x AND y, not a condition separator
+                        this.betweenAndTokens.add(child.symbol.tokenIndex);
+                    }
+                } else if (child.ruleIndex !== undefined) {
+                    // Check if any child is a query context (indicates IN subquery)
+                    const ruleName = child.constructor?.name;
+                    if (ruleName === 'QueryContext') {
+                        hasQuery = true;
+                    }
+                }
+            }
+            // If this predicate has a subquery (IN subquery), mark the parens
+            if (hasQuery) {
+                this._markSubqueryParens(ctx);
+            }
+        }
+        return this.visitChildren(ctx);
+    }
+    
+    // ========== CTE (WITH clause) ==========
+    
+    visitCtes(ctx: any): any {
+        // WITH clause - mark commas between CTEs for comma-first formatting
+        if (ctx.children) {
+            for (const child of ctx.children) {
+                if (child.symbol && child.symbol.type === getTokenType('COMMA')) {
+                    this.cteCommas.add(child.symbol.tokenIndex);
+                }
+            }
+        }
+        return this.visitChildren(ctx);
+    }
+    
+    visitNamedQuery(ctx: any): any {
+        // Individual CTE: name AS (subquery)
+        // Mark the opening and closing parens for indentation
+        if (ctx.children) {
+            for (const child of ctx.children) {
+                if (child.symbol) {
+                    const tokenType = child.symbol.type;
+                    if (tokenType === getTokenType('LEFT_PAREN')) {
+                        this.subqueryOpenParens.add(child.symbol.tokenIndex);
+                    } else if (tokenType === getTokenType('RIGHT_PAREN')) {
+                        this.subqueryCloseParens.add(child.symbol.tokenIndex);
+                    }
+                }
+            }
+        }
+        return this.visitChildren(ctx);
+    }
+    
+    // ========== FROM Subqueries ==========
+    
+    visitAliasedQuery(ctx: any): any {
+        // Subquery in FROM clause: (SELECT ...) alias
+        // Mark parens for indentation
+        this._markSubqueryParens(ctx);
+        return this.visitChildren(ctx);
+    }
+    
+    // ========== Expression Subqueries (IN, EXISTS, scalar) ==========
+    
+    visitExists(ctx: any): any {
+        // EXISTS (subquery)
+        this._markSubqueryParens(ctx);
+        return this.visitChildren(ctx);
+    }
+    
+    visitSubqueryExpression(ctx: any): any {
+        // Scalar subquery: (SELECT ...)
+        this._markSubqueryParens(ctx);
+        return this.visitChildren(ctx);
+    }
+    
+    // Helper to mark subquery parens in any context
+    private _markSubqueryParens(ctx: any): void {
+        if (ctx.children) {
+            for (const child of ctx.children) {
+                if (child.symbol) {
+                    const tokenType = child.symbol.type;
+                    if (tokenType === getTokenType('LEFT_PAREN')) {
+                        this.subqueryOpenParens.add(child.symbol.tokenIndex);
+                    } else if (tokenType === getTokenType('RIGHT_PAREN')) {
+                        this.subqueryCloseParens.add(child.symbol.tokenIndex);
+                    }
+                }
+            }
+        }
+    }
+    
+    // ========== DDL: CREATE TABLE ==========
+    
+    visitCreateTableHeader(ctx: any): any {
+        // This doesn't have the column list, just header
+        return this.visitChildren(ctx);
+    }
+    
+    visitCreateTable(ctx: any): any {
+        // CREATE TABLE with column definitions
+        // Find and mark the parentheses containing column definitions
+        this._markDdlColumnList(ctx);
+        return this.visitChildren(ctx);
+    }
+    
+    private _markDdlColumnList(ctx: any): void {
+        // Look for column definition list in CREATE TABLE
+        if (!ctx || !ctx.children) return;
+        let foundLeftParen = false;
+        let leftParenIndex = -1;
+        let commaCount = 0;
+        for (const child of ctx.children) {
+            if (child.symbol) {
+                const tokenType = child.symbol.type;
+                if (tokenType === getTokenType('LEFT_PAREN') && !foundLeftParen) {
+                    foundLeftParen = true;
+                    leftParenIndex = child.symbol.tokenIndex;
+                    this.ddlOpenParens.add(leftParenIndex);
+                } else if (tokenType === getTokenType('RIGHT_PAREN') && foundLeftParen) {
+                    this.ddlCloseParens.add(child.symbol.tokenIndex);
+                } else if (tokenType === getTokenType('COMMA') && foundLeftParen) {
+                    this.ddlColumnCommas.add(child.symbol.tokenIndex);
+                    commaCount++;
+                }
+            } else if (child.children && foundLeftParen) {
+                // Recurse to find commas
+                commaCount += this._markDdlCommasInContext(child);
+            }
+        }
+        // Mark as multi-column if there are commas
+        if (commaCount > 0 && leftParenIndex >= 0) {
+            this.ddlMultiColumn.add(leftParenIndex);
+        }
+    }
+    
+    private _markDdlCommasInContext(ctx: any): number {
+        if (!ctx || !ctx.children) return 0;
+        let count = 0;
+        for (const child of ctx.children) {
+            if (child.symbol && child.symbol.type === getTokenType('COMMA')) {
+                this.ddlColumnCommas.add(child.symbol.tokenIndex);
+                count++;
+            } else if (child.children) {
+                count += this._markDdlCommasInContext(child);
+            }
+        }
+        return count;
+    }
+    
+    // ========== DML: INSERT VALUES, UPDATE SET ==========
+    
+    visitInsertInto(ctx: any): any {
+        // INSERT INTO ... VALUES (row1), (row2)
+        // Mark commas between value rows
+        this._markValuesCommas(ctx);
+        return this.visitChildren(ctx);
+    }
+    
+    visitInlineTable(ctx: any): any {
+        // VALUES (row1), (row2) - mark commas between value tuples
+        this._markValuesCommas(ctx);
+        return this.visitChildren(ctx);
+    }
+    
+    private _markValuesCommas(ctx: any): void {
+        if (!ctx || !ctx.children) return;
+        let foundValues = false;
+        let parenDepth = 0;
+        for (const child of ctx.children) {
+            if (child.symbol) {
+                const symName = SqlBaseLexer.symbolicNames[child.symbol.type];
+                const tokenType = child.symbol.type;
+                if (symName === 'VALUES') {
+                    foundValues = true;
+                } else if (foundValues && tokenType === getTokenType('LEFT_PAREN')) {
+                    parenDepth++;
+                } else if (foundValues && tokenType === getTokenType('RIGHT_PAREN')) {
+                    parenDepth--;
+                } else if (foundValues && parenDepth === 0 && tokenType === getTokenType('COMMA')) {
+                    // Comma between value rows at top level (not inside a tuple)
+                    this.valuesCommas.add(child.symbol.tokenIndex);
+                }
+            } else if (child.children) {
+                this._markValuesCommas(child);
+            }
+        }
+    }
+    
+    visitUpdateTable(ctx: any): any {
+        // UPDATE table SET col=val, col=val WHERE ...
+        // Mark SET keyword and commas in SET clause
+        const commaCount = this._markSetClause(ctx, false, 0);
+        // If SET has multiple assignments, mark it for multiline
+        if (commaCount > 0 && this.setKeywordToken >= 0) {
+            this.multiItemClauses.add(this.setKeywordToken);
+        }
+        return this.visitChildren(ctx);
+    }
+    
+    private _markSetClause(ctx: any, foundSet: boolean, commaCount: number): number {
+        if (!ctx || !ctx.children) return commaCount;
+        for (const child of ctx.children) {
+            if (child.symbol) {
+                const symName = SqlBaseLexer.symbolicNames[child.symbol.type];
+                if (symName === 'SET') {
+                    foundSet = true;
+                    this.setKeywordToken = child.symbol.tokenIndex;
+                    this.clauseStartTokens.add(child.symbol.tokenIndex);
+                } else if (foundSet && child.symbol.type === getTokenType('COMMA')) {
+                    this.setClauseCommas.add(child.symbol.tokenIndex);
+                    commaCount++;
+                } else if (foundSet && symName === 'WHERE') {
+                    // Stop marking commas once we hit WHERE
+                    return commaCount;
+                }
+            } else if (child.children) {
+                commaCount = this._markSetClause(child, foundSet, commaCount);
+            }
+        }
+        return commaCount;
+    }
+
     // ========== SUBQUERY TRACKING ==========
     
     visitQuerySpecification(ctx: any): any {
@@ -366,8 +707,10 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
         }
     }
     
-    private _markListContext(ctx: any): void {
+    private _markListContext(ctx: any): boolean {
         // Mark commas in this list context by walking all children
+        // Returns true if multiple items (has commas)
+        let hasCommas = false;
         if (ctx.children) {
             let isFirst = true;
             for (const child of ctx.children) {
@@ -375,6 +718,7 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
                     const tokenType = child.symbol.type;
                     if (tokenType === getTokenType('COMMA')) {
                         this.listItemCommas.add(child.symbol.tokenIndex);
+                        hasCommas = true;
                     } else if (isFirst && tokenType !== getTokenType('COMMA') && child.symbol.tokenIndex >= 0) {
                         // Mark first non-comma token
                         this.listFirstItems.add(child.symbol.tokenIndex);
@@ -386,6 +730,7 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
                 }
             }
         }
+        return hasCommas;
     }
     
     private _markCommasInContext(ctx: any): void {
@@ -416,14 +761,17 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
         let count = 0;
         if (!ctx) return count;
         
-        // Recursively count AND/OR tokens
+        // Recursively count AND/OR tokens (but exclude BETWEEN's AND)
         if (ctx.children) {
             for (const child of ctx.children) {
                 if (child.symbol) {
                     const symbolicName = SqlBaseLexer.symbolicNames[child.symbol.type];
                     if (symbolicName === 'AND' || symbolicName === 'OR') {
-                        count++;
-                        this.conditionOperators.add(child.symbol.tokenIndex);
+                        // Don't count AND that's part of BETWEEN x AND y
+                        if (!this.betweenAndTokens.has(child.symbol.tokenIndex)) {
+                            count++;
+                            this.conditionOperators.add(child.symbol.tokenIndex);
+                        }
                     }
                 }
                 // Recurse into children
@@ -498,12 +846,18 @@ export function formatSql(sql: string): string {
         const tokenList = tokens.tokens;        // Uppercase parse (correct types)
         const output: string[] = [];
         let prevWasFunctionName = false;
+        let prevWasBuiltInFunctionKeyword = false;
         let insideFunctionArgs = 0; // Track parentheses depth in function calls
+        let insideParens = 0; // Track any parentheses depth (for comma spacing)
         let isFirstNonWsToken = true;
         let insideHint = false;
         let hintContent: string[] = [];
         let lastProcessedIndex = -1;
-        let baseIndent = 0; // Base indentation level
+        let subqueryDepth = 0; // Current subquery nesting depth
+        let ddlDepth = 0; // Current DDL column list nesting depth
+        
+        // Helper to get indent for current combined depth
+        const getBaseIndent = (depth: number): string => '    '.repeat(depth);
         
         // Track if we just output a SELECT/GROUP BY/ORDER BY keyword
         // to know when to add comma-first formatting for the list
@@ -512,6 +866,11 @@ export function formatSql(sql: string): string {
         let afterOrderByKeyword = false;
         let afterWhereKeyword = false;
         let afterHavingKeyword = false;
+        let afterSetKeyword = false;
+        let afterValuesKeyword = false;
+        
+        // Track if current clause has multiple items (should be multiline)
+        let currentClauseIsMultiItem = false;
         
         // Track first item in current list context
         let isFirstListItem = true;
@@ -605,6 +964,18 @@ export function formatSql(sql: string): string {
             const isClauseStart = analyzer.clauseStartTokens.has(tokenIndex);
             const isListComma = analyzer.listItemCommas.has(tokenIndex);
             const isConditionOperator = analyzer.conditionOperators.has(tokenIndex);
+            const isBetweenAnd = analyzer.betweenAndTokens.has(tokenIndex);
+            const isJoinOn = analyzer.joinOnTokens.has(tokenIndex);
+            const isSubqueryOpenParen = analyzer.subqueryOpenParens.has(tokenIndex);
+            const isSubqueryCloseParen = analyzer.subqueryCloseParens.has(tokenIndex);
+            const isCteComma = analyzer.cteCommas.has(tokenIndex);
+            const isDdlComma = analyzer.ddlColumnCommas.has(tokenIndex);
+            const isDdlOpenParen = analyzer.ddlOpenParens.has(tokenIndex);
+            const isDdlCloseParen = analyzer.ddlCloseParens.has(tokenIndex);
+            const isDdlMultiColumn = analyzer.ddlMultiColumn.has(tokenIndex);
+            const isValuesComma = analyzer.valuesCommas.has(tokenIndex);
+            const isSetComma = analyzer.setClauseCommas.has(tokenIndex);
+            const isSetKeyword = tokenIndex === analyzer.setKeywordToken;
             
             // Determine output text based on context
             let outputText: string;
@@ -633,12 +1004,33 @@ export function formatSql(sql: string): string {
                 outputText = text;
             }
             
+            // Track if current token is a function-like keyword (CAST, TRY_CAST, etc.)
+            // These are keywords that are used like functions: KEYWORD(args)
+            // Note: IN is in built-in functions but IN (list) is a predicate with space before (
+            const FUNCTION_LIKE_KEYWORDS = new Set([
+                'cast', 'try_cast', 'extract', 'position', 'substring', 'trim',
+                'overlay', 'percentile_cont', 'percentile_disc', 'any_value',
+                'first_value', 'last_value', 'nth_value', 'lead', 'lag'
+            ]);
+            const isBuiltInFunctionKeyword = isKeywordToken(tokenType, text) && 
+                FUNCTION_LIKE_KEYWORDS.has(text.toLowerCase());
+            
             // Track function argument depth
-            if (text === '(' && prevWasFunctionName) {
+            if (text === '(' && (prevWasFunctionName || prevWasBuiltInFunctionKeyword)) {
                 insideFunctionArgs++;
             } else if (text === ')' && insideFunctionArgs > 0) {
                 insideFunctionArgs--;
             }
+            
+            // Track general paren depth for comma spacing
+            if (text === '(') {
+                insideParens++;
+            } else if (text === ')' && insideParens > 0) {
+                insideParens--;
+            }
+            
+            // Track subquery depth - increment AFTER open paren
+            // (handled below after output)
             
             // Check if we need to insert AS keyword before this token (for aliases)
             if (analyzer.aliasInsertPositions.has(tokenIndex)) {
@@ -663,12 +1055,15 @@ export function formatSql(sql: string): string {
             if (symbolicName === 'SELECT' && isClauseStart) {
                 afterSelectKeyword = true;
                 isFirstListItem = true;
+                currentClauseIsMultiItem = analyzer.multiItemClauses.has(tokenIndex);
             } else if (symbolicName === 'GROUP' && isClauseStart) {
                 afterGroupByKeyword = true;
                 isFirstListItem = true;
+                currentClauseIsMultiItem = analyzer.multiItemClauses.has(tokenIndex);
             } else if (symbolicName === 'ORDER' && isClauseStart) {
                 afterOrderByKeyword = true;
                 isFirstListItem = true;
+                currentClauseIsMultiItem = analyzer.multiItemClauses.has(tokenIndex);
             } else if (symbolicName === 'WHERE' && isClauseStart) {
                 const isMultiline = analyzer.multilineConditionClauses.has(tokenIndex);
                 if (isMultiline) {
@@ -682,17 +1077,36 @@ export function formatSql(sql: string): string {
                     // Don't override - HAVING itself gets newline from isClauseStart below
                 }
             } else if (symbolicName === 'ON') {
-                // ON in JOIN clause - if multiline, add newline before ON
-                const isMultiline = analyzer.multilineConditionClauses.has(tokenIndex);
-                if (isMultiline && !isFirstNonWsToken) {
+                // ON in JOIN clause - always add newline before ON with indent
+                if (isJoinOn && !isFirstNonWsToken) {
                     needsNewline = true;
-                    indent = '    '; // 4-space indent for ON
+                    indent = getBaseIndent(subqueryDepth + ddlDepth) + '    '; // 4-space indent for ON
                 }
+            } else if (symbolicName === 'SET' && isSetKeyword) {
+                afterSetKeyword = true;
+                isFirstListItem = true;
+                currentClauseIsMultiItem = analyzer.multiItemClauses.has(tokenIndex);
+            } else if (symbolicName === 'VALUES') {
+                afterValuesKeyword = true;
+                isFirstListItem = true;
             }
             
             // Clause start gets newline (unless it's the first token)
             if (!isFirstNonWsToken && isClauseStart && !isInIdentifierContext) {
                 needsNewline = true;
+                indent = getBaseIndent(subqueryDepth + ddlDepth);
+            }
+            
+            // Subquery close paren handling - comes BEFORE the paren on its own line
+            if (isSubqueryCloseParen) {
+                needsNewline = true;
+                indent = getBaseIndent(subqueryDepth - 1); // Use parent depth for closing paren
+            }
+            
+            // DDL close paren handling - comes BEFORE the paren on its own line (if multi-column)
+            if (isDdlCloseParen && ddlDepth > 0) {
+                needsNewline = true;
+                indent = '    '.repeat(subqueryDepth + ddlDepth - 1); // Use parent depth for closing paren
             }
             
             // List comma handling (SELECT columns, GROUP BY, ORDER BY)
@@ -700,18 +1114,48 @@ export function formatSql(sql: string): string {
                 // Comma in list context - newline before comma
                 needsNewline = true;
                 // The comma will be output with leading indent on its own line
-                indent = '    '; // 4-space indent for comma
+                indent = getBaseIndent(subqueryDepth + ddlDepth) + '    '; // 4-space indent for comma
                 isFirstListItem = false;
                 justOutputCommaFirstStyle = true; // Flag to skip space after comma
             }
             
-            // Condition operator handling (AND/OR in WHERE/HAVING)
-            if (isConditionOperator) {
+            // CTE comma handling (comma-first for multiple CTEs)
+            if (isCteComma) {
                 needsNewline = true;
-                indent = '    '; // 4-space indent for AND/OR
+                indent = ''; // No indent, comma at start of line (CTEs at top level)
+                justOutputCommaFirstStyle = true;
+            }
+            
+            // DDL column list comma handling
+            if (isDdlComma) {
+                needsNewline = true;
+                // DDL commas are at the same level as the column definitions, not indented further
+                indent = getBaseIndent(subqueryDepth) + '    '; // 4-space indent for comma (ddlDepth already accounts for being inside parens)
+                justOutputCommaFirstStyle = true;
+            }
+            
+            // VALUES comma handling (between value rows)
+            if (isValuesComma) {
+                needsNewline = true;
+                indent = getBaseIndent(subqueryDepth + ddlDepth); // No extra indent, comma at start
+                justOutputCommaFirstStyle = true;
+            }
+            
+            // SET clause comma handling
+            if (isSetComma) {
+                needsNewline = true;
+                indent = getBaseIndent(subqueryDepth + ddlDepth) + '    '; // 4-space indent for comma
+                justOutputCommaFirstStyle = true;
+            }
+            
+            // Condition operator handling (AND/OR in WHERE/HAVING) - but not BETWEEN's AND
+            if (isConditionOperator && !isBetweenAnd) {
+                needsNewline = true;
+                indent = getBaseIndent(subqueryDepth + ddlDepth) + '    '; // 4-space indent for AND/OR
             }
             
             // First list item after SELECT/GROUP BY/ORDER BY
+            // Only go multiline if the clause has multiple items
             if (!isListComma && (afterSelectKeyword || afterGroupByKeyword || afterOrderByKeyword) &&
                 symbolicName !== 'SELECT' && symbolicName !== 'GROUP' && symbolicName !== 'ORDER') {
                 // Skip the BY token after GROUP/ORDER
@@ -719,18 +1163,40 @@ export function formatSql(sql: string): string {
                     (afterOrderByKeyword && symbolicName === 'BY') ||
                     symbolicName === 'DISTINCT') {
                     // Don't treat BY or DISTINCT as first list item
-                } else if (isFirstListItem) {
+                } else if (isFirstListItem && currentClauseIsMultiItem) {
                     needsNewline = true;
-                    indent = '     '; // 5-space indent for first item
+                    indent = getBaseIndent(subqueryDepth + ddlDepth) + '     '; // 5-space indent for first item
+                    isFirstListItem = false;
+                } else if (isFirstListItem) {
+                    // Single item - stay inline, just mark as processed
                     isFirstListItem = false;
                 }
+            }
+            
+            // First assignment after SET
+            // Only go multiline if SET has multiple assignments
+            if (!isSetComma && afterSetKeyword && symbolicName !== 'SET' && isFirstListItem) {
+                if (currentClauseIsMultiItem) {
+                    needsNewline = true;
+                    indent = getBaseIndent(subqueryDepth + ddlDepth) + '     '; // 5-space indent for first item
+                }
+                isFirstListItem = false;
+                afterSetKeyword = false;
+            }
+            
+            // First tuple after VALUES
+            if (!isValuesComma && afterValuesKeyword && symbolicName !== 'VALUES' && isFirstListItem) {
+                needsNewline = true;
+                indent = getBaseIndent(subqueryDepth + ddlDepth); // Base indent for VALUES rows
+                isFirstListItem = false;
+                afterValuesKeyword = false;
             }
             
             // First condition after WHERE/HAVING
             if (!isConditionOperator && (afterWhereKeyword || afterHavingKeyword) && 
                 symbolicName !== 'WHERE' && symbolicName !== 'HAVING') {
                 needsNewline = true;
-                indent = '    '; // 4-space indent for first condition
+                indent = getBaseIndent(subqueryDepth + ddlDepth) + '    '; // 4-space indent for first condition
                 afterWhereKeyword = false;
                 afterHavingKeyword = false;
             }
@@ -750,18 +1216,43 @@ export function formatSql(sql: string): string {
             } else if (output.length > 0) {
                 const lastStr = output[output.length - 1];
                 const lastChar = lastStr.charAt(lastStr.length - 1);
+                
+                // Double-colon cast: no space around ::
+                const isDoubleColon = text === '::' || lastChar === ':' && lastStr.endsWith('::');
+                const prevIsDoubleColon = lastStr.endsWith('::');
+                
                 // Skip space in certain cases
                 const skipSpace = lastChar === '(' || lastChar === '.' || lastChar === '\n' ||
                     text === ')' || text === '.' ||
-                    (text === '(' && prevWasFunctionName) ||
-                    (text === ',' && insideFunctionArgs > 0) || // No space before comma in functions
-                    (lastChar === ',' && insideFunctionArgs > 0) || // No space after comma in functions
+                    text === '::' || prevIsDoubleColon || // No space around ::
+                    (text === '(' && (prevWasFunctionName || prevWasBuiltInFunctionKeyword)) || // No space before ( after function
+                    (text === ',' && insideParens > 0) || // No space before comma inside parens
                     justOutputCommaFirstStyle || // No space after comma in comma-first style
                     afterWhereKeyword || afterHavingKeyword; // No space before first condition in multiline WHERE/HAVING
-                if (!skipSpace) output.push(' ');
+                    
+                // Add comma-space: space after comma inside parens (unless comma-first)
+                const needsCommaSpace = lastChar === ',' && insideParens > 0 && !justOutputCommaFirstStyle;
+                
+                if (!skipSpace || needsCommaSpace) output.push(' ');
             }
             
             output.push(outputText);
+            
+            // Track subquery depth changes AFTER outputting the token
+            if (isSubqueryOpenParen) {
+                subqueryDepth++;
+            } else if (isSubqueryCloseParen && subqueryDepth > 0) {
+                subqueryDepth--;
+            }
+            
+            // Track DDL depth changes AFTER outputting the token
+            // Also add newline after multi-column DDL open paren
+            if (isDdlOpenParen && isDdlMultiColumn) {
+                output.push('\n' + '    '.repeat(subqueryDepth + 1)); // Newline + 4 spaces base, space before token added normally
+                ddlDepth++;
+            } else if (isDdlCloseParen && ddlDepth > 0) {
+                ddlDepth--;
+            }
             
             // Reset comma-first flag after outputting the next token
             if (justOutputCommaFirstStyle && text !== ',') {
@@ -780,6 +1271,7 @@ export function formatSql(sql: string): string {
             }
             
             prevWasFunctionName = isFunctionCall;
+            prevWasBuiltInFunctionKeyword = isBuiltInFunctionKeyword;
             isFirstNonWsToken = false;
         }
         
