@@ -5,6 +5,20 @@
 //!
 //! This module is part of the grammar-driven parser refactor. Once complete,
 //! it will be the authoritative converter from ANTLR CST to our IR types.
+//!
+//! # Status
+//!
+//! This module contains stub implementations that are ready for the full
+//! ANTLR integration. The `AstBuilder` struct provides the foundation for
+//! walking the ANTLR parse tree and building IR nodes.
+//!
+//! # Future Implementation
+//!
+//! The full implementation will require:
+//! 1. Implementing `SqlBaseParserListener` trait for `AstBuilder`
+//! 2. Adding enter/exit handlers for all ~200+ grammar rules
+//! 3. Using stack-based building for nested structures
+//! 4. NEVER using catch-all patterns that could drop tokens
 
 use crate::error::FormatError;
 use crate::ir::*;

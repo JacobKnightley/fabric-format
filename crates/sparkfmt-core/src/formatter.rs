@@ -789,12 +789,12 @@ fn format_order_by_clause(order_by: &OrderByClause, output: &mut String, indent:
     }
 }
 
-/// Format CLUSTER BY clause (Spark-specific)
-fn format_cluster_by_clause(cluster_by: &ClusterByClause, output: &mut String, indent: usize) {
+/// Helper function for formatting comma-first expression lists (used by BY clauses)
+fn format_expression_list_comma_first(keyword: &str, items: &[Expression], output: &mut String, indent: usize) {
     output.push_str(&" ".repeat(indent));
-    output.push_str("CLUSTER BY");
+    output.push_str(keyword);
     
-    for (i, item) in cluster_by.items.iter().enumerate() {
+    for (i, item) in items.iter().enumerate() {
         output.push('\n');
         
         if i == 0 {
@@ -810,25 +810,14 @@ fn format_cluster_by_clause(cluster_by: &ClusterByClause, output: &mut String, i
     }
 }
 
+/// Format CLUSTER BY clause (Spark-specific)
+fn format_cluster_by_clause(cluster_by: &ClusterByClause, output: &mut String, indent: usize) {
+    format_expression_list_comma_first("CLUSTER BY", &cluster_by.items, output, indent);
+}
+
 /// Format DISTRIBUTE BY clause (Spark-specific)
 fn format_distribute_by_clause(distribute_by: &DistributeByClause, output: &mut String, indent: usize) {
-    output.push_str(&" ".repeat(indent));
-    output.push_str("DISTRIBUTE BY");
-    
-    for (i, item) in distribute_by.items.iter().enumerate() {
-        output.push('\n');
-        
-        if i == 0 {
-            // First item: indent + FIRST_ITEM_INDENT spaces
-            output.push_str(&" ".repeat(indent + FIRST_ITEM_INDENT));
-        } else {
-            // Subsequent items: comma-first with indent + BASE_INDENT
-            output.push_str(&" ".repeat(indent + BASE_INDENT));
-            output.push(',');
-        }
-        
-        format_expression(item, output);
-    }
+    format_expression_list_comma_first("DISTRIBUTE BY", &distribute_by.items, output, indent);
 }
 
 /// Format SORT BY clause (Spark-specific)
