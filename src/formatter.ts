@@ -326,7 +326,7 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
         // GROUP BY clause
         this._markClauseStart(ctx);
         // Mark commas in GROUP BY list (but not inside GROUPING SETS/ROLLUP/CUBE)
-        const commaCount = this._markCommasAtLevel(ctx);
+        const commaCount = this._markListCommasExcludingGroupingAnalytics(ctx);
         // Only make GROUP BY multiline if there are actual list commas (not inside groupingAnalytics)
         if (commaCount > 0 && ctx.start) {
             // Check if any commas were actually marked (some might have been skipped due to groupingAnalytics)
@@ -414,7 +414,7 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
             }
         }
         // Mark commas in ORDER BY list
-        const commaCount = this._markCommasAtLevel(ctx);
+        const commaCount = this._markListCommasExcludingGroupingAnalytics(ctx);
         if (commaCount > 0 && orderTokenIndex !== null) {
             this.multiItemClauses.add(orderTokenIndex);
         }
@@ -549,10 +549,10 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
         return this.visitChildren(ctx);
     }
     
-    private _markCommasAtLevel(ctx: any): number {
+    private _markListCommasExcludingGroupingAnalytics(ctx: any): number {
         // Mark commas at this level and recursively in children
         // Returns count of commas found
-        // Skip marking if we're inside groupingAnalytics context
+        // Excludes commas that are direct children of groupingAnalytics contexts
         let count = 0;
         if (!ctx || !ctx.children) return 0;
         
@@ -571,7 +571,7 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
                 }
             } else if (child.ruleIndex !== undefined) {
                 // Recurse into rule contexts
-                count += this._markCommasAtLevel(child);
+                count += this._markListCommasExcludingGroupingAnalytics(child);
             }
         }
         return count;
@@ -1181,15 +1181,13 @@ export function formatSql(sql: string): string {
                         prevSymbolic === 'ON' || prevSymbolic === 'AND' || prevSymbolic === 'OR' ||
                         prevSymbolic === 'WHEN' || prevSymbolic === 'THEN' || prevSymbolic === 'ELSE' ||
                         prevSymbolic === 'RETURN' || prevSymbolic === 'CASE' ||
-                        // Comparison operators
+                        // Comparison and assignment operators
                         prevSymbolic === 'EQ' || prevSymbolic === 'NEQ' || prevSymbolic === 'LT' ||
                         prevSymbolic === 'LTE' || prevSymbolic === 'GT' || prevSymbolic === 'GTE' ||
                         prevSymbolic === 'NSEQ' ||
                         // Arithmetic operators
                         prevSymbolic === 'PLUS' || prevSymbolic === 'MINUS' || prevSymbolic === 'ASTERISK' ||
                         prevSymbolic === 'SLASH' || prevSymbolic === 'PERCENT' || prevSymbolic === 'DIV' ||
-                        // Assignment
-                        prevSymbolic === 'EQ' ||
                         // Other
                         prevSymbolic === 'AS' || prevSymbolic === 'SET'
                     );
