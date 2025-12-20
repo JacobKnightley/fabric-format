@@ -576,8 +576,24 @@ export function formatSql(sql: string): string {
             let outputText: string;
             
             if (isFunctionCall) {
-                // Function name → uppercase
-                outputText = text.toUpperCase();
+                // Check if it's a built-in function (keyword) or UDF
+                const isBuiltIn = isKeywordToken(tokenType, text);
+                if (isBuiltIn) {
+                    // Built-in function defined as keyword (CAST, IF, etc.) → uppercase
+                    outputText = text.toUpperCase();
+                } else {
+                    // Identifier token - apply heuristic to distinguish built-in from UDF
+                    // Mixed case indicates UDF (MyCustomFunc) → preserve
+                    // All lowercase/uppercase (including with underscores) → uppercase as built-in
+                    const hasMixedCase = text !== text.toLowerCase() && text !== text.toUpperCase();
+                    if (hasMixedCase) {
+                        // UDF with mixed case → preserve original casing
+                        outputText = text;
+                    } else {
+                        // Built-in function (count, sum, row_number, etc.) → uppercase
+                        outputText = text.toUpperCase();
+                    }
+                }
             } else if (isInIdentifierContext) {
                 // Identifier → preserve original casing
                 outputText = text;
