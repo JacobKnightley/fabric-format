@@ -588,13 +588,404 @@ Note: Line comments (`--`) before SELECT ARE correctly preserved as leading comm
 
 ---
 
+## Bug 21: INTERVAL Literals Incorrectly Add AS Keyword
+
+**Status:** Open  
+**Severity:** Critical (semantic change)  
+**Location:** Parser - interval literal handling
+
+### Reproduction
+
+```sql
+-- Input
+SELECT INTERVAL '1' DAY, INTERVAL '2' HOUR FROM t
+
+-- Actual Output (BROKEN)
+SELECT
+     INTERVAL '1' AS DAY
+    ,INTERVAL '2' AS HOUR
+FROM t
+
+-- Expected Output
+SELECT
+     INTERVAL '1' DAY
+    ,INTERVAL '2' HOUR
+FROM t
+```
+
+The interval unit keyword is being treated as an alias, changing the meaning entirely.
+
+---
+
+## Bug 22: Missing Spaces Around OR Inside Parentheses
+
+**Status:** Open  
+**Severity:** Critical (syntax error)  
+**Location:** Formatter - parenthesized expression handling
+
+### Reproduction
+
+```sql
+-- Input
+SELECT * FROM t WHERE (a = 1 OR b = 2) AND (c = 3 OR d = 4)
+
+-- Actual Output (BROKEN - syntax error!)
+SELECT
+     *
+FROM t
+WHERE
+    (a=1ORb=2)
+    AND (c=3ORd=4)
+
+-- Expected Output
+SELECT
+     *
+FROM t
+WHERE
+    (a=1 OR b=2)
+    AND (c=3 OR d=4)
+```
+
+Missing spaces around OR inside parentheses produces invalid SQL.
+
+---
+
+## Bug 23: WITH RECURSIVE Not Formatted
+
+**Status:** Open  
+**Severity:** Medium (returns original)  
+**Location:** Parser - CTE handling
+
+### Reproduction
+
+```sql
+-- Input
+WITH RECURSIVE cte AS (SELECT 1 AS n UNION ALL SELECT n + 1 FROM cte WHERE n < 10) SELECT * FROM cte
+
+-- Actual Output (BROKEN - returned unchanged)
+WITH RECURSIVE cte AS (SELECT 1 AS n UNION ALL SELECT n + 1 FROM cte WHERE n < 10) SELECT * FROM cte
+
+-- Expected Output
+WITH RECURSIVE cte AS (
+    SELECT
+         1 AS n
+    UNION ALL
+    SELECT
+         n+1
+    FROM cte
+    WHERE n<10
+)
+SELECT
+     *
+FROM cte
+```
+
+---
+
+## Bug 24: COUNT(DISTINCT ...) Causes Parse Failure
+
+**Status:** Open  
+**Severity:** High (returns original)  
+**Location:** Parser - aggregate function handling
+
+### Reproduction
+
+```sql
+-- Input
+SELECT COUNT(DISTINCT a) FROM t
+
+-- Actual Output (BROKEN - returned unchanged)
+SELECT COUNT(DISTINCT a) FROM t
+
+-- Expected Output
+SELECT
+     COUNT(DISTINCT a)
+FROM t
+```
+
+The DISTINCT keyword inside aggregate functions is not recognized.
+
+---
+
+## Bug 25: GROUP BY WITH ROLLUP Dropped
+
+**Status:** Open  
+**Severity:** High (silent data loss)  
+**Location:** Parser - GROUP BY clause
+
+### Reproduction
+
+```sql
+-- Input
+SELECT a, b, SUM(c) FROM t GROUP BY a, b WITH ROLLUP
+
+-- Actual Output (BROKEN)
+SELECT
+     a
+    ,b
+    ,SUM(c)
+FROM t
+GROUP BY
+     a
+    ,b
+
+-- Expected Output
+SELECT
+     a
+    ,b
+    ,SUM(c)
+FROM t
+GROUP BY
+     a
+    ,b
+WITH ROLLUP
+```
+
+The WITH ROLLUP modifier is silently dropped.
+
+---
+
+## Bug 26: TRIM with BOTH/LEADING/TRAILING FROM Syntax Not Formatted
+
+**Status:** Open  
+**Severity:** Medium (returns original)  
+**Location:** Parser - special function syntax
+
+### Reproduction
+
+```sql
+-- Input
+SELECT TRIM(BOTH ' ' FROM a) FROM t
+
+-- Actual Output (BROKEN - returned unchanged)
+SELECT TRIM(BOTH ' ' FROM a) FROM t
+
+-- Expected Output
+SELECT
+     TRIM(BOTH ' ' FROM a)
+FROM t
+```
+
+The SQL-standard TRIM syntax with direction and FROM is not recognized.
+
+---
+
+## Bug 27: SUBSTR/SUBSTRING with FROM...FOR Syntax Not Formatted
+
+**Status:** Open  
+**Severity:** Medium (returns original)  
+**Location:** Parser - special function syntax
+
+### Reproduction
+
+```sql
+-- Input
+SELECT SUBSTR(a FROM 1 FOR 5) FROM t
+
+-- Actual Output (BROKEN - returned unchanged)
+SELECT SUBSTR(a FROM 1 FOR 5) FROM t
+
+-- Expected Output
+SELECT
+     SUBSTR(a FROM 1 FOR 5)
+FROM t
+```
+
+The SQL-standard SUBSTRING syntax is not recognized.
+
+---
+
+## Bug 28: EXTRACT Function Not Formatted
+
+**Status:** Open  
+**Severity:** Medium (returns original)  
+**Location:** Parser - special function syntax
+
+### Reproduction
+
+```sql
+-- Input
+SELECT EXTRACT(YEAR FROM dt), EXTRACT(MONTH FROM dt) FROM t
+
+-- Actual Output (BROKEN - returned unchanged)
+SELECT EXTRACT(YEAR FROM dt), EXTRACT(MONTH FROM dt) FROM t
+
+-- Expected Output
+SELECT
+     EXTRACT(YEAR FROM dt)
+    ,EXTRACT(MONTH FROM dt)
+FROM t
+```
+
+---
+
+## Bug 29: POSITION with IN Syntax Not Formatted
+
+**Status:** Open  
+**Severity:** Medium (returns original)  
+**Location:** Parser - special function syntax
+
+### Reproduction
+
+```sql
+-- Input
+SELECT POSITION('x' IN str) FROM t
+
+-- Actual Output (BROKEN - returned unchanged)
+SELECT POSITION('x' IN str) FROM t
+
+-- Expected Output
+SELECT
+     POSITION('x' IN str)
+FROM t
+```
+
+---
+
+## Bug 30: OVERLAY Function Not Formatted
+
+**Status:** Open  
+**Severity:** Medium (returns original)  
+**Location:** Parser - special function syntax
+
+### Reproduction
+
+```sql
+-- Input
+SELECT OVERLAY(str PLACING 'x' FROM 1 FOR 2) FROM t
+
+-- Actual Output (BROKEN - returned unchanged)
+SELECT OVERLAY(str PLACING 'x' FROM 1 FOR 2) FROM t
+
+-- Expected Output
+SELECT
+     OVERLAY(str PLACING 'x' FROM 1 FOR 2)
+FROM t
+```
+
+---
+
+## Bug 31: Multi-Parameter Lambda Expressions Not Formatted
+
+**Status:** Open  
+**Severity:** Medium (returns original)  
+**Location:** Parser - lambda expression handling
+
+### Reproduction
+
+```sql
+-- Input
+SELECT REDUCE(arr, 0, (acc, x) -> acc + x) FROM t
+
+-- Actual Output (BROKEN - returned unchanged)
+SELECT REDUCE(arr, 0, (acc, x) -> acc + x) FROM t
+
+-- Expected Output
+SELECT
+     REDUCE(arr,0,(acc,x)->acc+x)
+FROM t
+```
+
+Single-parameter lambdas work (`x -> x + 1`) but multi-parameter lambdas fail.
+
+---
+
+## Bug 32: Time Travel Syntax Truncated
+
+**Status:** Open  
+**Severity:** High (silent data loss)  
+**Location:** Parser - FROM clause
+
+### Reproduction
+
+```sql
+-- Input
+SELECT * FROM t FOR TIMESTAMP AS OF '2024-01-01'
+
+-- Actual Output (BROKEN)
+SELECT
+     *
+FROM t FOR
+
+-- Expected Output
+SELECT
+     *
+FROM t FOR TIMESTAMP AS OF '2024-01-01'
+```
+
+Delta Lake / Iceberg time travel syntax is truncated.
+
+---
+
+## Bug 33: NULLS FIRST/LAST in ORDER BY Dropped
+
+**Status:** Open  
+**Severity:** High (silent data loss)  
+**Location:** Parser - ORDER BY clause
+
+### Reproduction
+
+```sql
+-- Input
+SELECT * FROM t ORDER BY a ASC NULLS FIRST, b DESC NULLS LAST
+
+-- Actual Output (BROKEN)
+SELECT
+     *
+FROM t
+ORDER BY
+     a ASC
+    ,b DESC
+
+-- Expected Output
+SELECT
+     *
+FROM t
+ORDER BY
+     a ASC NULLS FIRST
+    ,b DESC NULLS LAST
+```
+
+The NULLS FIRST/LAST modifiers are silently dropped.
+
+---
+
+## Bug 34: Double-Colon Cast with Parameterized Types Truncated
+
+**Status:** Open  
+**Severity:** High (silent data loss)  
+**Location:** Parser - cast expression handling
+
+### Reproduction
+
+```sql
+-- Input
+SELECT a::INT, b::VARCHAR(100), c::DECIMAL(10,2) FROM t
+
+-- Actual Output (BROKEN)
+SELECT
+     a::INT
+    ,b::VARCHAR
+
+-- Expected Output
+SELECT
+     a::INT
+    ,b::VARCHAR(100)
+    ,c::DECIMAL(10,2)
+FROM t
+```
+
+The type parameters and subsequent columns are dropped.
+
+---
+
 ## Summary by Severity
 
 | Severity | Count | Description |
 |----------|-------|-------------|
-| Critical | 5 | Silent data loss or semantic corruption |
-| High | 2 | Complete data loss or parse failure |
-| Medium | 7 | Unsupported constructs (partial output) |
+| Critical | 7 | Silent data loss or semantic corruption |
+| High | 6 | Complete data loss or parse failure |
+| Medium | 14 | Unsupported constructs (partial output or returns original) |
 | Low | 4 | Comment placement issues (preserved but not ideal) |
 
 ### Critical Bugs (Fix First)
@@ -604,11 +995,25 @@ Note: Line comments (`--`) before SELECT ARE correctly preserved as leading comm
 3. **Bug 7** - Hex literals corrupted
 4. **Bug 8** - Binary literals corrupted
 5. **Bugs 1-4** - Quoted identifiers dropped in various contexts
+6. **Bug 21** - INTERVAL literals add incorrect AS keyword
+7. **Bug 22** - Missing spaces around OR in parentheses (produces invalid SQL)
 
 ### High Priority
 
-6. **Bug 9** - Double-quoted identifiers fail to parse
-7. **Bug 17** - Comment after LIMIT dropped
+8. **Bug 9** - Double-quoted identifiers fail to parse
+9. **Bug 17** - Comment after LIMIT dropped
+10. **Bug 24** - COUNT(DISTINCT ...) not parsed
+11. **Bug 25** - GROUP BY WITH ROLLUP dropped
+12. **Bug 32** - Time travel syntax truncated
+13. **Bug 33** - NULLS FIRST/LAST dropped
+14. **Bug 34** - Double-colon cast with params truncated
+
+### Medium Priority (Returns Original or Partial)
+
+15. **Bugs 10-15** - Set operations (EXCEPT, INTERSECT) and Spark clauses (CLUSTER/DISTRIBUTE/SORT BY)
+16. **Bug 23** - WITH RECURSIVE not formatted
+17. **Bugs 26-30** - Special function syntax (TRIM, SUBSTR, EXTRACT, POSITION, OVERLAY)
+18. **Bug 31** - Multi-parameter lambdas not formatted
 
 ### Pattern: Silent `_ => {}`
 
@@ -621,3 +1026,11 @@ Bugs 5, 7, 8 are all lexer issues with special number formats.
 ### Pattern: Comment Attachment
 
 Bugs 17-20 relate to comment attachment - some clauses don't properly capture trailing comments, causing them to either be lost (Bug 17) or moved to fallback positions (Bugs 18-20).
+
+### Pattern: Special Function Syntax
+
+Bugs 26-30 all involve SQL-standard functions with special syntax (keyword arguments like FROM, FOR, IN, PLACING) that the parser doesn't recognize.
+
+### Pattern: Clause Modifiers Dropped
+
+Bugs 25, 33 involve modifiers at the end of clauses (WITH ROLLUP, NULLS FIRST/LAST) that are silently dropped.

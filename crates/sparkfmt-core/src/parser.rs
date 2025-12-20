@@ -6,8 +6,21 @@ use lazy_static::lazy_static;
 lazy_static! {
     static ref WHITESPACE: Regex = Regex::new(r"^\s+").unwrap();
     static ref IDENTIFIER: Regex = Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_]*").unwrap();
-    static ref NUMBER: Regex = Regex::new(r"^[0-9]+(?:\.[0-9]+)?").unwrap();
+    // Support for all Spark SQL numeric literal formats from grammar:
+    // - Integer: 123
+    // - Decimal: 123.456 or .456
+    // - Scientific notation: 1.5e10, 2E-5, 3.14e+2
+    // - Type suffixes: L (BIGINT), S (SMALLINT), Y (TINYINT), F (FLOAT), D (DOUBLE), BD (BIGDECIMAL)
+    // Pattern breakdown:
+    //   (?:[0-9]+\.?[0-9]*|\.[0-9]+)  - Integer, decimal, or leading decimal point
+    //   (?:[eE][+-]?[0-9]+)?          - Optional scientific notation exponent
+    //   (?:[LlSsYyFfDd]|[Bb][Dd])?    - Optional type suffix (case-insensitive)
+    static ref NUMBER: Regex = Regex::new(
+        r"^(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?:[LlSsYyFfDd]|[Bb][Dd])?"
+    ).unwrap();
     static ref STRING_LITERAL: Regex = Regex::new(r"^'([^']|'')*'").unwrap();
+    static ref DOUBLEQUOTED_STRING: Regex = Regex::new(r#"^"([^"\\]|""|\\.)* ""#).unwrap();
+    static ref HEX_BINARY: Regex = Regex::new(r"^[Xx]'[0-9A-Fa-f]*'").unwrap();
 }
 
 pub fn parse(input: &str) -> Result<Statement, FormatError> {
@@ -345,11 +358,32 @@ impl Lexer {
             return Err(FormatError::new("Unterminated quoted identifier".to_string()));
         }
         
+        // Try hex binary literal (X'1F2A')
+        if let Some(m) = HEX_BINARY.find(remaining) {
+            let token = ParserToken::StringLiteral(m.as_str().to_string());
+            self.advance_by(m.end());
+            return Ok(token);
+        }
+        
         // Try string literal
         if let Some(m) = STRING_LITERAL.find(remaining) {
             let token = ParserToken::StringLiteral(m.as_str().to_string());
             self.advance_by(m.end());
             return Ok(token);
+        }
+        
+        // Try double-quoted string (can be identifier or string depending on context)
+        if let Some(m) = DOUBLEQUOTED_STRING.find(remaining) {
+            let matched = m.as_str();
+            // Safely extract content between quotes
+            if matched.len() >= 2 {
+                let token = ParserToken::QuotedIdentifier(matched[1..matched.len()-1].to_string());
+                self.advance_by(m.end());
+                return Ok(token);
+            } else {
+                // Invalid double-quoted string
+                return Err(FormatError::new("Invalid double-quoted string".to_string()));
+            }
         }
         
         // Try number
@@ -366,16 +400,17 @@ impl Lexer {
             return Ok(ParserToken::Word(text)); // Preserve original casing
         }
         
-        // Try multi-char operators first (longest match first)
-        for symbol in &["<=", ">=", "<>", "!=", "||", "::"] {
-            if remaining.starts_with(symbol) {
+        // Try multi-char operators and punctuation first (longest match first)
+        // Use generated operators from grammar
+        for symbol in crate::generated::OPERATOR_SYMBOLS.iter() {
+            if remaining.starts_with(*symbol) {
                 self.advance_by(symbol.len());
                 return Ok(ParserToken::Symbol(symbol.to_string()));
             }
         }
         
-        // Try single-char symbols
-        for symbol in &["(", ")", ",", ".", "*", "=", "<", ">", "!", "+", "-", "/", "|", "[", "]", "~", ":"] {
+        // Try single-char punctuation tokens (not in operators list)
+        for symbol in &["(", ")", ",", ".", "[", "]", ";"] {
             if remaining.starts_with(symbol) {
                 self.advance_by(symbol.len());
                 return Ok(ParserToken::Symbol(symbol.to_string()));
@@ -866,7 +901,9 @@ fn parse_comparison_expression(lexer: &mut Lexer) -> Result<Expression, FormatEr
     
     // Standard comparison operators
     let token = lexer.peek()?;
-    if matches!(token, ParserToken::Symbol(s) if matches!(s.as_str(), "=" | "<" | ">" | "<=" | ">=" | "<>" | "!=")) {
+    if matches!(token, ParserToken::Symbol(s) if matches!(s.as_str(), 
+        "=" | "<" | ">" | "<=" | ">=" | "<>" | "!=" | "<=>" | "==" | 
+        "!<" | "!>")) {
         let op = match lexer.next()? {
             ParserToken::Symbol(s) => s,
             _ => unreachable!(),
@@ -891,7 +928,9 @@ fn parse_additive_expression(lexer: &mut Lexer) -> Result<Expression, FormatErro
     
     loop {
         let token = lexer.peek()?;
-        if matches!(token, ParserToken::Symbol(s) if s == "+" || s == "-") {
+        // Handle additive, bitwise, shift, and concat operators
+        if matches!(token, ParserToken::Symbol(s) if matches!(s.as_str(),
+            "+" | "-" | "|" | "||" | "&" | "^" | "<<" | ">>" | ">>>" | "|>")) {
             let op = match lexer.next()? {
                 ParserToken::Symbol(s) => s,
                 _ => unreachable!(),
@@ -915,7 +954,8 @@ fn parse_multiplicative_expression(lexer: &mut Lexer) -> Result<Expression, Form
     
     loop {
         let token = lexer.peek()?;
-        if matches!(token, ParserToken::Symbol(s) if s == "*" || s == "/") {
+        if matches!(token, ParserToken::Symbol(s) if matches!(s.as_str(), 
+            "*" | "/" | "%")) {
             let op = match lexer.next()? {
                 ParserToken::Symbol(s) => s,
                 _ => unreachable!(),
@@ -978,6 +1018,26 @@ fn parse_postfix_expression(lexer: &mut Lexer) -> Result<Expression, FormatError
                     expr: Box::new(expr),
                     data_type,
                     pg_style: true,
+                };
+            }
+            ParserToken::Symbol(s) if s == "->" => {
+                // Arrow operator for struct/map access or lambda
+                lexer.next()?;
+                let field = parse_identifier(lexer)?;
+                expr = Expression::BinaryOp {
+                    left: Box::new(expr),
+                    op: "->".to_string(),
+                    right: Box::new(Expression::Identifier(field)),
+                };
+            }
+            ParserToken::Symbol(s) if s == ":" => {
+                // Semi-structured field access: expr:field
+                lexer.next()?;
+                let field = parse_identifier(lexer)?;
+                expr = Expression::BinaryOp {
+                    left: Box::new(expr),
+                    op: ":".to_string(),
+                    right: Box::new(Expression::Identifier(field)),
                 };
             }
             ParserToken::Word(w) if w.eq_ignore_ascii_case("OVER") => {
@@ -1161,7 +1221,30 @@ fn parse_primary_expression(lexer: &mut Lexer) -> Result<Expression, FormatError
                 let token = lexer.peek()?;
                 if !matches!(token, ParserToken::Symbol(s) if s == ")") {
                     loop {
-                        args.push(parse_expression(lexer)?);
+                        // Try to parse as named argument (param => value)
+                        let expr = parse_expression(lexer)?;
+                        
+                        // Check if this is a named argument
+                        let token = lexer.peek()?;
+                        if matches!(token, ParserToken::Symbol(s) if s == "=>") {
+                            // This is a named argument
+                            // The expr should be an identifier
+                            let param_name = match expr {
+                                Expression::Identifier(id) => id,
+                                _ => return Err(FormatError::new("Expected parameter name before =>".to_string())),
+                            };
+                            lexer.next()?; // consume =>
+                            let value = parse_expression(lexer)?;
+                            // Represent named argument as a binary op for now
+                            args.push(Expression::BinaryOp {
+                                left: Box::new(Expression::Identifier(param_name)),
+                                op: "=>".to_string(),
+                                right: Box::new(value),
+                            });
+                        } else {
+                            // Regular positional argument
+                            args.push(expr);
+                        }
                         
                         let token = lexer.peek()?;
                         if matches!(token, ParserToken::Symbol(s) if s == ",") {

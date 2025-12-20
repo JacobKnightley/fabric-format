@@ -5,6 +5,7 @@ pub mod error;
 pub mod keywords;
 pub mod functions;
 pub mod hints;
+pub mod generated;
 
 pub use error::FormatError;
 
