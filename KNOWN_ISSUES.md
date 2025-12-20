@@ -6,9 +6,35 @@ This document tracks known formatting issues that still need to be fixed.
 
 ---
 
-## 1. GROUPING SETS / ROLLUP / CUBE - Comma Breaking
+## 1. Complex CASE Statements - Should Multiline
 
-Inside GROUPING SETS, ROLLUP, and CUBE, commas incorrectly trigger multiline formatting.
+**Priority**: HIGH
+
+Single WHEN stays inline, but multiple WHEN branches should multiline.
+
+```sql
+-- INPUT
+select case when status = 1 then 'active' when status = 2 then 'pending' else 'unknown' end from t
+
+-- CURRENT OUTPUT (WRONG)
+SELECT CASE WHEN status = 1 THEN 'active' WHEN status = 2 THEN 'pending' ELSE 'unknown' END
+FROM t
+
+-- EXPECTED OUTPUT
+SELECT
+     CASE
+        WHEN status = 1 THEN 'active'
+        WHEN status = 2 THEN 'pending'
+        ELSE 'unknown'
+     END
+FROM t
+```
+
+---
+
+## 2. GROUPING SETS / ROLLUP / CUBE - Comma Breaking
+
+**Priority**: MEDIUM
 
 ### GROUPING SETS
 ```sql
@@ -64,9 +90,9 @@ Same issue as ROLLUP.
 
 ---
 
-## 2. Unary Operators - Extra Space
+## 3. Unary Operators - Extra Space
 
-Unary minus/plus get space before their operand.
+**Priority**: HIGH
 
 ```sql
 -- INPUT
@@ -87,9 +113,9 @@ FROM t
 
 ---
 
-## 3. Array Access - Extra Spaces
+## 4. Array Access - Extra Spaces
 
-Array subscript brackets get spaces around them.
+**Priority**: HIGH
 
 ```sql
 -- INPUT
@@ -110,9 +136,9 @@ FROM t
 
 ---
 
-## 4. Timestamp/Interval Literals - Not Parsed Correctly
+## 5. Timestamp/Interval Literals - Not Parsed Correctly
 
-Timestamp and interval literals are not being recognized as single tokens.
+**Priority**: LOW
 
 ```sql
 -- INPUT
@@ -130,9 +156,9 @@ Note: Without the string literal around the timestamp, the parser treats it as a
 
 ---
 
-## 5. SET Configuration - Uppercasing Config Names
+## 6. SET Configuration - Uppercasing Config Names
 
-SET command incorrectly uppercases configuration parameter names.
+**Priority**: LOW
 
 ```sql
 -- INPUT
@@ -147,9 +173,9 @@ SET spark.sql.shuffle.partitions = 200
 
 ---
 
-## 6. MERGE Statement - No Clause Formatting
+## 7. MERGE Statement - No Clause Formatting
 
-MERGE statements don't have clause keywords on separate lines.
+**Priority**: LOW
 
 ```sql
 -- INPUT
@@ -167,9 +193,9 @@ WHEN MATCHED THEN UPDATE SET val = s.val
 
 ---
 
-## 7. Lambda Expression Spacing
+## 8. Lambda Expression Spacing
 
-Plus sign before a number in lambda body loses its space.
+**Priority**: MEDIUM
 
 ```sql
 -- INPUT
@@ -186,9 +212,9 @@ FROM t
 
 ---
 
-## 8. Complex Inline Comments
+## 9. Complex Inline Comments
 
-Inline comments on columns may be misplaced during reformatting.
+**Priority**: LOW
 
 ```sql
 -- INPUT
@@ -209,8 +235,10 @@ FROM t
 
 ---
 
-## Priority
+## Priority Summary
 
-1. **High**: Unary operators, Array access (common patterns)
-2. **Medium**: GROUPING SETS/ROLLUP/CUBE, Lambda spacing
-3. **Low**: MERGE formatting, SET config names, Complex comments
+| Priority | Issues |
+|----------|--------|
+| HIGH | #1 Complex CASE, #3 Unary operators, #4 Array access |
+| MEDIUM | #2 GROUPING SETS, #8 Lambda spacing |
+| LOW | #5 Timestamp literals, #6 SET config, #7 MERGE, #9 Comments |
