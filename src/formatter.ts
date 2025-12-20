@@ -79,8 +79,8 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
     tokenDepthMap: Map<number, number> = new Map();
     
     // Track positions where AS keyword should be inserted (for aliases without AS)
-    // Maps the token index AFTER the expression to the alias token index
-    aliasInsertPositions: Map<number, number> = new Map();
+    // Set of alias token indices that need AS inserted before them
+    aliasInsertPositions: Set<number> = new Set();
     
     visit(ctx: any): any {
         if (!ctx) return null;
@@ -283,9 +283,9 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
             const alias = ctx.errorCapturingIdentifier();
             
             if (expr && expr.stop && alias && alias.start) {
-                // Insert AS after expression, before alias
+                // Insert AS before this alias token
                 const aliasIndex = alias.start.tokenIndex;
-                this.aliasInsertPositions.set(aliasIndex, alias.start.tokenIndex);
+                this.aliasInsertPositions.add(aliasIndex);
             }
         }
         
