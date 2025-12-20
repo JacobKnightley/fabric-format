@@ -1,213 +1,139 @@
-# sparkfmt — Spark SQL Formatter
+# sparkfmt
 
-A deterministic, opinionated Spark SQL formatter compiled to WASM.
+TypeScript/JavaScript Spark SQL Formatter using ANTLR4 parse tree.
 
-## Features
+## Overview
 
-- **Deterministic formatting**: Same input always produces the same output
-- **Token-normalized printing**: Discards original whitespace, reprints from scratch
-- **Opinionated style**: Follows Databricks/Spark-style structural formatting
-- **WASM-ready**: Compiled to WebAssembly for browser and Node.js use
-- **Grammar-driven**: Based on Spark SQL's syntax
-- **Comment handling**: Foundation for comment preservation (full anchoring system in progress)
+A 100% **grammar-driven** SQL formatter for Apache Spark SQL. The ANTLR grammar files (`SqlBaseLexer.g4`, `SqlBaseParser.g4`) are the **single source of truth** — no hardcoded keyword or function lists.
 
-## Formatting Rules
+This implementation uses the JavaScript ANTLR4 runtime, which can successfully parse the full Apache Spark SQL grammar **without stack overflow**, making it viable for use in browser extensions.
 
-### Comma-First Style
+## Key Features
 
-The formatter uses comma-first style for SELECT, GROUP BY, and ORDER BY clauses:
+- **100% Grammar-Driven**: Keywords detected via `symbolicNames[tokenType] === text.toUpperCase()` — no hardcoded lists
+- **Uppercases SQL keywords**: `SELECT`, `FROM`, `WHERE`, etc.
+- **Uppercases built-in functions**: `COUNT()`, `SUM()`, `ROW_NUMBER()`, etc.
+- **Preserves identifier casing**: Table names, column names, aliases stay as-is
+- **Context-sensitive keyword handling**: `a.key`, `a.order` preserve lowercase (identifiers after dot), while `ORDER BY` is uppercase (keyword position)
+- **Adds newlines before major clauses**: `SELECT`, `FROM`, `WHERE`, `JOIN`, etc.
+
+## Context-Sensitive Keywords
+
+The critical capability this formatter demonstrates is **context-sensitive keyword handling**:
 
 ```sql
-SELECT
-     col1
-    ,col2
-    ,col3
-FROM table
-```
+-- Input:
+select a.key, a.order, a.value from t order by a.order
 
-### Token Normalization
-
-The formatter reprints from scratch, normalizing all spacing:
-- **No spaces after commas** in function calls: `func(a,b,c)`
-- **No spaces around operators**: `x=1`, `a+b`
-- **Single space** between other tokens where needed
-- Original whitespace and line breaks are completely discarded
-
-### Keywords and Context-Sensitive Identifiers
-
-- **Keywords** are UPPERCASE in keyword positions (SELECT, FROM, WHERE, JOIN, ON, AND, OR, etc.)
-- **Identifiers** always preserve their original casing (even if they match keyword names)
-- **Built-in functions** are UPPERCASE (COUNT, SUM, COALESCE, etc.)
-- **User-defined functions** preserve their original casing
-
-**Context-Sensitive Example:**
-```sql
--- Input
-SELECT order, key, value FROM items WHERE x = 1 AND y = 2
-
--- Output (identifiers preserve casing)
-SELECT
-     order
-    ,key
-    ,value
-FROM items
-WHERE
-    x=1
-    AND y=2
-```
-
-### Query Hints (Planned)
-
-- Query hint support in development
-- Hint names will be UPPERCASE: `/*+ BROADCAST(table) */`
-- Arguments inside hints will preserve casing
-- See `.github/copilot-instructions.md` for specification
-
-### Aliases
-
-- Column aliases always use `AS`
-- Table aliases never use `AS`
-
-### Clauses
-
-- **SELECT**: Comma-first with 5-space indent for first item, 4-space for others
-- **FROM**: Inline with table name
-- **JOINs**: Each JOIN starts on a new line at column 0
-- **WHERE/HAVING**: Inline for single condition, multi-line with operator-leading AND/OR for multiple
-- **GROUP BY**: Comma-first on separate lines
-- **ORDER BY**: Comma-first, preserves ASC/DESC
-- **LIMIT**: Always inline
-
-## Example
-
-**Input:**
-```sql
-select a,b,count(*) c from t where x=1 and y=2 group by a,b having count(*)>1 order by a limit 10
-```
-
-**Output:**
-```sql
-SELECT
-     a
-    ,b
-    ,count(*) AS c
+-- Output:
+SELECT a.key, a.order, a.value
 FROM t
-WHERE
-    x=1
-    AND y=2
-GROUP BY
-     a
-    ,b
-HAVING count(*)>1
-ORDER BY
-     a
-LIMIT 10
+ORDER BY a.order
+```
+
+Note how:
+- `a.key`, `a.order`, `a.value` preserve lowercase - these are **identifiers** (field access after dot)
+- `ORDER BY` is uppercase - this is a **keyword** position
+
+This is impossible with a simple tokenizer because you need the **parse tree context** to know whether `order` is an identifier or keyword.
+
+## Build
+
+```bash
+# Install dependencies
+npm install
+
+# Build ANTLR parser (requires Java and python)
+npm run build:antlr
+
+# Build TypeScript
+npm run build:ts
+
+# Or both
+npm run build
 ```
 
 ## Usage
 
-### Command-Line Tool (Recommended)
+```bash
+# Format inline SQL
+node dist/cli.js -i "select * from t where x = 1"
 
-Format SQL files from the command line:
+# Format file
+node dist/cli.js query.sql
+
+# Check if file needs formatting
+node dist/cli.js -c query.sql
+
+# Pipe from stdin
+echo "select * from t" | node dist/cli.js
+```
+
+## Test
 
 ```bash
-# Format a file and print to stdout
-./format-sql.sh query.sql
-
-# Format and save to a new file
-./format-sql.sh query.sql formatted.sql
-
-# Format from stdin
-cat query.sql | ./format-sql.sh -
+npm test
 ```
 
-See [FORMATTING_GUIDE.md](FORMATTING_GUIDE.md) for complete documentation and examples.
-
-### Rust Library
-
-```rust
-use sparkfmt_core::format_sql;
-
-let input = "select a, b from t";
-let formatted = format_sql(input).unwrap();
-println!("{}", formatted);
-```
-
-### WASM (JavaScript/TypeScript)
-
-```javascript
-import { format_sql } from './sparkfmt_wasm';
-
-const formatted = format_sql("select a, b from t");
-console.log(formatted);
-```
-
-## Building
-
-### Build Rust library
-
-```bash
-cargo build --release
-```
-
-### Build WASM
-
-First, install wasm-pack:
-
-```bash
-cargo install wasm-pack
-```
-
-Then build the WASM module:
-
-```bash
-cd crates/sparkfmt-wasm
-wasm-pack build --target web
-```
-
-## Testing
-
-```bash
-cargo test
-```
-
-## Project Structure
+## Architecture
 
 ```
-sparkfmt/
-  crates/
-    sparkfmt-core/       # Core formatting library
-      src/
-        lib.rs           # Public API
-        parser.rs        # SQL parser
-        formatter.rs     # Formatting logic
-        ir.rs            # Internal representation
-        error.rs         # Error types
-      tests/
-        acceptance.rs    # Acceptance tests
-    sparkfmt-wasm/       # WASM bindings
-      src/
-        lib.rs           # WASM exports
-  Cargo.toml             # Workspace configuration
-  README.md
+Input SQL
+    ↓
+ANTLR Lexer (SqlBaseLexer.js)
+    ↓
+ANTLR Parser (SqlBaseParser.js) 
+    ↓
+Parse Tree
+    ↓
+IdentifierContextVisitor
+    - Walks tree to mark identifier positions
+    - Marks function call positions
+    ↓
+Token Formatting
+    - Uppercase keywords (unless identifier position)
+    - Uppercase built-in functions
+    - Preserve identifiers
+    - Add newlines before clauses
+    ↓
+Formatted SQL
 ```
 
-## Supported SQL Features
+## Files
 
-- SELECT queries with DISTINCT
-- CTEs (WITH clause)
-- JOINs (INNER, LEFT, RIGHT, FULL, CROSS)
-- WHERE and HAVING clauses
-- GROUP BY
-- ORDER BY with ASC/DESC
-- LIMIT
-- UNION and UNION ALL
-- Comments (preserved)
+```
+src/
+├── formatter.ts    # Main formatting logic (100% grammar-driven)
+├── cli.ts          # Command-line interface
+├── test.ts         # E2E tests (16 tests)
+├── index.ts        # Public exports
+└── generated/      # ANTLR-generated parser (gitignored)
 
-## Error Handling
+scripts/
+└── build_antlr_js.py  # Build script for ANTLR parser
 
-If parsing fails, the formatter returns the original input unchanged.
+grammar/
+├── SqlBaseLexer.g4    # Source of truth for keywords
+├── SqlBaseParser.g4   # Source of truth for grammar rules
+└── VERSION            # Spark version
+```
 
-## License
+## Grammar-Driven Architecture
 
-MIT
+The formatter uses **no hardcoded keyword or function lists**. Instead:
+
+1. **Keyword Detection**: A token is a keyword if `symbolicNames[tokenType] === text.toUpperCase()`
+2. **Identifier Context**: Parse tree visitor marks positions within `identifier`, `qualifiedName`, `functionCall` contexts
+3. **Clause Boundaries**: Parse tree visitor methods determine where clauses start for newline insertion
+
+This ensures if Spark's grammar supports it, the formatter supports it automatically.
+
+## Why JavaScript/TypeScript?
+
+The Rust ANTLR runtime (`antlr4rust`) causes **stack overflow** when parsing Spark SQL grammar, even for simple queries like `SELECT a FROM t`. This is due to:
+
+1. Deep grammar recursion in Spark SQL
+2. Rust's stack-based recursion in the ANTLR runtime
+3. WASM's fixed ~1MB stack limit in browsers
+
+The JavaScript ANTLR4 runtime handles deep recursion through the JS engine's optimization, making it suitable for browser extensions.
