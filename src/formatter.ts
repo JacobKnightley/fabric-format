@@ -233,6 +233,18 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
 }
 
 /**
+ * Format a hint's content: uppercase hint names, preserve table names
+ * Example: "broadcast(t1), merge(t2)" → "BROADCAST(t1), MERGE(t2)"
+ */
+function formatHintContent(content: string): string {
+    // Hint format: HINT_NAME(args) [, HINT_NAME(args)]*
+    // Uppercase the hint name before '(', preserve everything else
+    return content.replace(/([a-zA-Z_][a-zA-Z0-9_]*)\s*(\()/g, (match, name, paren) => {
+        return name.toUpperCase() + paren;
+    });
+}
+
+/**
  * Format SQL - 100% grammar-driven
  */
 export function formatSql(sql: string): string {
@@ -265,23 +277,103 @@ export function formatSql(sql: string): string {
         const origTokens = new antlr4.CommonTokenStream(origLexer);
         origTokens.fill();
         
+        // Build a map of all tokens (including hidden) by their position
+        // We'll process them in order, including hidden channel tokens
+        const allOrigTokens = origTokens.tokens;
+        
         // Format tokens
         const tokenList = tokens.tokens;        // Uppercase parse (correct types)
-        const origTokenList = origTokens.tokens; // Original casing
         const output: string[] = [];
         let prevWasFunctionName = false;
         let isFirstNonWsToken = true;
+        let insideHint = false;
+        let hintContent: string[] = [];
+        let lastProcessedIndex = -1;
         
-        for (let i = 0; i < tokenList.length && i < origTokenList.length; i++) {
+        for (let i = 0; i < tokenList.length && i < allOrigTokens.length; i++) {
             const token = tokenList[i];
-            const origToken = origTokenList[i];
+            const origToken = allOrigTokens[i];
             
             if (token.type === antlr4.Token.EOF) continue;
+            
+            // Process any hidden tokens (comments) that appear before this token
+            // by checking tokens between lastProcessedIndex and current i
+            for (let j = lastProcessedIndex + 1; j < i; j++) {
+                const hiddenToken = allOrigTokens[j];
+                if (hiddenToken.channel === 1) { // HIDDEN channel
+                    if (hiddenToken.type === SqlBaseLexer.SIMPLE_COMMENT || 
+                        hiddenToken.type === SqlBaseLexer.BRACKETED_COMMENT) {
+                        // Add newline before comment if not at start and not already on new line
+                        if (output.length > 0) {
+                            const lastStr = output[output.length - 1];
+                            if (lastStr.charAt(lastStr.length - 1) !== '\n') {
+                                output.push('\n');
+                            }
+                        }
+                        output.push(hiddenToken.text);
+                        // SIMPLE_COMMENT already includes its trailing newline
+                        // BRACKETED_COMMENT needs a newline after it
+                        if (hiddenToken.type === SqlBaseLexer.BRACKETED_COMMENT && 
+                            !hiddenToken.text.endsWith('\n')) {
+                            output.push('\n');
+                        }
+                    }
+                }
+            }
+            lastProcessedIndex = i;
+            
             if (token.type === SqlBaseLexer.WS) continue;
             
             const text = origToken.text;
             const tokenType = token.type;
             const tokenIndex = token.tokenIndex;
+            
+            // Handle hints: /*+ ... */
+            if (tokenType === SqlBaseLexer.HENT_START) {
+                // Add space before hint if needed
+                if (output.length > 0) {
+                    const last = output[output.length - 1];
+                    if (last !== ' ' && last !== '\n') {
+                        output.push(' ');
+                    }
+                }
+                insideHint = true;
+                hintContent = [];
+                output.push('/*+');
+                continue;
+            }
+            
+            if (insideHint) {
+                if (tokenType === SqlBaseLexer.HENT_END) {
+                    // Format and output hint content
+                    const formatted = formatHintContent(hintContent.join(''));
+                    output.push(' ' + formatted + ' ');
+                    output.push('*/');
+                    insideHint = false;
+                    hintContent = [];
+                    prevWasFunctionName = false;
+                    continue;
+                } else {
+                    // Collect hint content with spacing
+                    // Add space before token if needed (not after ( or , and not before ) or ,)
+                    if (hintContent.length > 0) {
+                        const last = hintContent[hintContent.length - 1];
+                        // Don't add space if last was '(' or if last was ', ' (space after comma)
+                        // or if current token is ')' or ','
+                        const needsSpace = last !== '(' && last !== ' ' && 
+                                          text !== ')' && text !== ',';
+                        if (needsSpace) {
+                            hintContent.push(' ');
+                        }
+                    }
+                    hintContent.push(text);
+                    // Add space after comma
+                    if (text === ',') {
+                        hintContent.push(' ');
+                    }
+                    continue;
+                }
+            }
             
             const isInIdentifierContext = analyzer.identifierTokens.has(tokenIndex);
             const isFunctionCall = analyzer.functionCallTokens.has(tokenIndex);
@@ -311,10 +403,19 @@ export function formatSql(sql: string): string {
             
             // Spacing
             if (needsNewline) {
-                output.push('\n');
+                // Only add newline if not already at start of line
+                if (output.length > 0) {
+                    const lastStr = output[output.length - 1];
+                    if (lastStr.charAt(lastStr.length - 1) !== '\n') {
+                        output.push('\n');
+                    }
+                } else {
+                    output.push('\n');
+                }
             } else if (output.length > 0) {
-                const last = output[output.length - 1];
-                const skipSpace = last === '(' || last === '.' || last === '\n' ||
+                const lastStr = output[output.length - 1];
+                const lastChar = lastStr.charAt(lastStr.length - 1);
+                const skipSpace = lastChar === '(' || lastChar === '.' || lastChar === '\n' ||
                     text === ')' || text === ',' || text === '.' ||
                     (text === '(' && prevWasFunctionName);
                 if (!skipSpace) output.push(' ');
