@@ -132,6 +132,10 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
     caseElseTokens: Set<number> = new Set(); // ELSE tokens inside multiline CASE
     caseEndTokens: Set<number> = new Set(); // END tokens inside multiline CASE
     
+    // Track GROUPING SETS/ROLLUP/CUBE contexts (suppress comma-first inside)
+    groupingAnalyticsParens: Set<number> = new Set(); // ( after GROUPING SETS/ROLLUP/CUBE
+    insideGroupingAnalytics: boolean = false; // Track if we're currently inside one
+    
     // Track current SELECT token for associating with list items
     private currentSelectToken: number = -1;
 
@@ -321,12 +325,74 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
     visitAggregationClause(ctx: any): any {
         // GROUP BY clause
         this._markClauseStart(ctx);
-        // Mark commas in GROUP BY list
+        // Mark commas in GROUP BY list (but not inside GROUPING SETS/ROLLUP/CUBE)
         const commaCount = this._markCommasAtLevel(ctx);
+        // Only make GROUP BY multiline if there are actual list commas (not inside groupingAnalytics)
         if (commaCount > 0 && ctx.start) {
-            this.multiItemClauses.add(ctx.start.tokenIndex);
+            // Check if any commas were actually marked (some might have been skipped due to groupingAnalytics)
+            // We can't easily check this here, so we'll use a different approach:
+            // Count how many commas in children are NOT in groupingAnalytics contexts
+            let actualCommaCount = 0;
+            if (ctx.children) {
+                for (const child of ctx.children) {
+                    if (child.symbol && child.symbol.type === getTokenType('COMMA')) {
+                        if (this.listItemCommas.has(child.symbol.tokenIndex)) {
+                            actualCommaCount++;
+                        }
+                    }
+                }
+            }
+            if (actualCommaCount > 0) {
+                this.multiItemClauses.add(ctx.start.tokenIndex);
+            }
         }
         return this.visitChildren(ctx);
+    }
+    
+    visitGroupingAnalytics(ctx: any): any {
+        // GROUPING SETS/ROLLUP/CUBE - don't mark commas as list items
+        // Grammar: (ROLLUP | CUBE) LEFT_PAREN groupingSet (COMMA groupingSet)* RIGHT_PAREN
+        //       or GROUPING SETS LEFT_PAREN groupingElement (COMMA groupingElement)* RIGHT_PAREN
+        
+        // Check if this is ROLLUP or CUBE (no space before paren) or GROUPING SETS (space before paren)
+        let isRollupOrCube = false;
+        if (ctx.children) {
+            for (const child of ctx.children) {
+                if (child.symbol) {
+                    const symName = SqlBaseLexer.symbolicNames[child.symbol.type];
+                    if (symName === 'ROLLUP' || symName === 'CUBE') {
+                        isRollupOrCube = true;
+                    } else if (symName === 'LEFT_PAREN') {
+                        this.groupingAnalyticsParens.add(child.symbol.tokenIndex);
+                        // Mark this paren as function-like (no space before) for ROLLUP/CUBE
+                        if (isRollupOrCube) {
+                            // We need to handle this in the formatting logic
+                            // Mark the preceding token as a function call
+                            const parenIndex = child.symbol.tokenIndex;
+                            // Find the preceding ROLLUP or CUBE token
+                            for (let i = 0; i < ctx.children.length; i++) {
+                                const c = ctx.children[i];
+                                if (c.symbol) {
+                                    const sn = SqlBaseLexer.symbolicNames[c.symbol.type];
+                                    if ((sn === 'ROLLUP' || sn === 'CUBE') && c.symbol.tokenIndex < parenIndex) {
+                                        this.functionCallTokens.add(c.symbol.tokenIndex);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // Visit children but don't mark commas as list commas
+        const wasInside = this.insideGroupingAnalytics;
+        this.insideGroupingAnalytics = true;
+        const result = this.visitChildren(ctx);
+        this.insideGroupingAnalytics = wasInside;
+        return result;
     }
     
     visitQueryOrganization(ctx: any): any {
@@ -486,12 +552,21 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
     private _markCommasAtLevel(ctx: any): number {
         // Mark commas at this level and recursively in children
         // Returns count of commas found
+        // Skip marking if we're inside groupingAnalytics context
         let count = 0;
         if (!ctx || !ctx.children) return 0;
+        
+        // Check if current context is groupingAnalytics
+        const isGroupingAnalytics = ctx.ruleIndex !== undefined && 
+            SqlBaseParser.ruleNames[ctx.ruleIndex] === 'groupingAnalytics';
+        
         for (const child of ctx.children) {
             if (child.symbol) {
                 if (child.symbol.type === getTokenType('COMMA')) {
-                    this.listItemCommas.add(child.symbol.tokenIndex);
+                    // Only mark as list comma if NOT directly inside groupingAnalytics
+                    if (!isGroupingAnalytics) {
+                        this.listItemCommas.add(child.symbol.tokenIndex);
+                    }
                     count++;
                 }
             } else if (child.ruleIndex !== undefined) {

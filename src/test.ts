@@ -579,6 +579,23 @@ const testCases: TestCase[] = [
         input: 'select case when x = 1 then "a" when x = 2 then "b" end from t',
         expected: 'SELECT\n     CASE\n        WHEN x = 1 THEN "A"\n        WHEN x = 2 THEN "B"\n     END\nFROM t',
     },
+    
+    // GROUPING SETS, ROLLUP, CUBE - keep arguments inline
+    {
+        name: 'GROUPING SETS inline',
+        input: 'select a, sum(x) from t group by grouping sets ((a), (b), ())',
+        expected: 'SELECT\n     a\n    ,SUM(x)\nFROM t\nGROUP BY GROUPING SETS ((a), (b), ())',
+    },
+    {
+        name: 'ROLLUP inline',
+        input: 'select a, b, sum(x) from t group by rollup(a, b)',
+        expected: 'SELECT\n     a\n    ,b\n    ,SUM(x)\nFROM t\nGROUP BY ROLLUP(a, b)',
+    },
+    {
+        name: 'CUBE inline',
+        input: 'select a, b, sum(x) from t group by cube(a, b)',
+        expected: 'SELECT\n     a\n    ,b\n    ,SUM(x)\nFROM t\nGROUP BY CUBE(a, b)',
+    },
 ];
 
 function runTests(): void {
