@@ -1,0 +1,21 @@
+{
+  "name": "sparkfmt-ts",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Spark SQL Formatter using ANTLR4 - TypeScript POC",
+  "main": "dist/index.js",
+  "scripts": {
+    "build:antlr": "python scripts/build_antlr_js.py",
+    "build:ts": "tsc",
+    "build": "npm run build:antlr && npm run build:ts",
+    "test": "node dist/test.js",
+    "format": "node dist/cli.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "antlr4": "^4.13.2"
+  }
+}
