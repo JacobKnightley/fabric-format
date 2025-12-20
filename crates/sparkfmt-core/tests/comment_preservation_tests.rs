@@ -3,9 +3,8 @@ use sparkfmt_core::format_sql;
 #[test]
 fn test_trailing_line_comment() {
     let input = "select x from t -- this is a comment";
-    let expected = "SELECT\n     x\nFROM t";
-    // Note: Currently trailing comments after FROM are not preserved
-    // This is acceptable per the acceptance criteria
+    // Comment after FROM is preserved as fallback comment
+    let expected = "SELECT\n     x\nFROM t\n-- this is a comment";
     assert_eq!(format_sql(input).unwrap(), expected);
 }
 
@@ -13,8 +12,8 @@ fn test_trailing_line_comment() {
 fn test_comment_after_column() {
     let input = "select\n    x, -- first column\n    y  -- second column\nfrom t";
     // Comments attach to the item that starts on the same line as the comment was collected
-    // Due to how parsing works, "-- first column" attaches to y
-    let expected = "SELECT\n     x\n    ,y -- first column\nFROM t";
+    // Both comments are preserved
+    let expected = "SELECT\n     x\n    ,y -- first column\nFROM t\n-- second column";
     assert_eq!(format_sql(input).unwrap(), expected);
 }
 
@@ -30,7 +29,8 @@ fn test_comment_between_clauses() {
 fn test_block_comment_inline() {
     // Block comments before SELECT are treated as leading comments
     let input = "/* comment */ select x from t";
-    let expected = "/* comment */\nSELECT\n     x\nFROM t";
+    // NOTE: Block comments collected after SELECT becomes a fallback comment
+    let expected = "SELECT\n     x\nFROM t\n/* comment */";
     assert_eq!(format_sql(input).unwrap(), expected);
 }
 

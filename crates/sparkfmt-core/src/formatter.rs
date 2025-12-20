@@ -124,6 +124,12 @@ fn format_select_query(query: &SelectQuery, output: &mut String, indent: usize) 
         output.push('\n');
         format_limit_clause(limit, output, indent);
     }
+    
+    // Emit fallback comments (unconsumed comments from this query)
+    for comment in &query.fallback_comments {
+        output.push('\n');
+        format_comment(comment, output, indent);
+    }
 }
 
 fn format_comment(comment: &Comment, output: &mut String, indent: usize) {
@@ -615,6 +621,14 @@ fn format_join(join: &Join, output: &mut String, _indent: usize) {
             }
             
             format_expression(&condition.expr, output);
+            
+            // Format trailing inline comment
+            if let Some(ref comment) = condition.trailing_comment {
+                if matches!(comment.attachment, CommentAttachment::TrailingInline) {
+                    output.push(' ');
+                    output.push_str(&comment.text);
+                }
+            }
         }
     }
 }

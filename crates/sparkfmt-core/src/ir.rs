@@ -147,6 +147,7 @@ pub struct SelectQuery {
     pub limit: Option<LimitClause>,
     pub leading_comments: Vec<Comment>,
     pub hint_comment: Option<String>, // Query hint: /*+ ... */
+    pub fallback_comments: Vec<Comment>, // Unconsumed comments to emit at end
 }
 
 #[derive(Debug, Clone, PartialEq)]

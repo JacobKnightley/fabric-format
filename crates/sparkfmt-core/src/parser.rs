@@ -13,6 +13,27 @@ lazy_static! {
 pub fn parse(input: &str) -> Result<Statement, FormatError> {
     let mut lexer = Lexer::new(input);
     let statement = parse_statement(&mut lexer)?;
+    
+    // Check for unconsumed comments and emit warning
+    if let Some(registry) = &lexer.registry {
+        let unconsumed = registry.get_unconsumed_comments();
+        if !unconsumed.is_empty() {
+            #[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+            {
+                for comment in &unconsumed {
+                    // Note: web_sys logging would go here if needed
+                    // For now, we silently accept unconsumed comments as they're emitted as fallback
+                }
+            }
+            #[cfg(not(all(target_arch = "wasm32", feature = "wasm")))]
+            {
+                for comment in &unconsumed {
+                    eprintln!("Warning: Unconsumed comment at line {}: {}", comment.line, comment.text);
+                }
+            }
+        }
+    }
+    
     Ok(statement)
 }
 
@@ -27,12 +48,99 @@ pub enum ParserToken {
 }
 
 #[derive(Debug, Clone)]
-struct CommentInfo {
-    text: String,
-    line: usize,
-    col: usize,
-    is_line_comment: bool,
-    is_hint: bool,
+pub struct CommentInfo {
+    pub text: String,
+    pub line: usize,
+    pub col: usize,
+    pub is_line_comment: bool,
+    pub is_hint: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct TrackedComment {
+    pub info: CommentInfo,
+    pub consumed: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct CommentRegistry {
+    pub comments: Vec<TrackedComment>,
+}
+
+impl CommentRegistry {
+    pub fn new(comments: Vec<CommentInfo>) -> Self {
+        Self {
+            comments: comments.into_iter().map(|info| TrackedComment {
+                info,
+                consumed: false,
+            }).collect(),
+        }
+    }
+    
+    /// Find and consume a comment on a specific line
+    pub fn consume_on_line(&mut self, line: usize, is_line_comment: bool) -> Option<Comment> {
+        let idx = self.comments.iter().position(|c| {
+            !c.consumed && c.info.is_line_comment == is_line_comment && c.info.line == line
+        })?;
+        
+        self.comments[idx].consumed = true;
+        Some(Comment {
+            text: self.comments[idx].info.text.clone(),
+            is_line_comment: self.comments[idx].info.is_line_comment,
+            attachment: CommentAttachment::TrailingInline,
+        })
+    }
+    
+    /// Get all unconsumed comments (excluding hints) in a line range
+    pub fn unconsumed_in_range(&self, start: usize, end: usize) -> Vec<(usize, &TrackedComment)> {
+        self.comments.iter()
+            .enumerate()
+            .filter(|(_, c)| !c.consumed && !c.info.is_hint && c.info.line >= start && c.info.line <= end)
+            .collect()
+    }
+    
+    /// Consume all unconsumed comments in a line range
+    pub fn consume_range(&mut self, start: usize, end: usize) {
+        for comment in &mut self.comments {
+            if !comment.consumed && !comment.info.is_hint && comment.info.line >= start && comment.info.line <= end {
+                comment.consumed = true;
+            }
+        }
+    }
+    
+    /// Get all unconsumed non-hint comments for fallback emission
+    pub fn get_unconsumed_comments(&self) -> Vec<&CommentInfo> {
+        self.comments.iter()
+            .filter(|c| !c.consumed && !c.info.is_hint)
+            .map(|c| &c.info)
+            .collect()
+    }
+    
+    /// Get hint comments (always consumed separately)
+    pub fn get_hint_comment(&mut self) -> Option<String> {
+        if let Some(idx) = self.comments.iter().position(|c| !c.consumed && c.info.is_hint) {
+            self.comments[idx].consumed = true;
+            Some(self.comments[idx].info.text.clone())
+        } else {
+            None
+        }
+    }
+    
+    /// Get leading comments (non-hint comments before parsing starts)
+    pub fn consume_leading_comments(&mut self, before_line: usize) -> Vec<Comment> {
+        let mut leading = Vec::new();
+        for comment in &mut self.comments {
+            if !comment.consumed && !comment.info.is_hint && comment.info.line < before_line {
+                comment.consumed = true;
+                leading.push(Comment {
+                    text: comment.info.text.clone(),
+                    is_line_comment: comment.info.is_line_comment,
+                    attachment: CommentAttachment::Leading,
+                });
+            }
+        }
+        leading
+    }
 }
 
 struct Lexer {
@@ -42,6 +150,7 @@ struct Lexer {
     col: usize,
     peeked: Option<ParserToken>,
     comments: Vec<CommentInfo>,
+    registry: Option<CommentRegistry>,
 }
 
 impl Lexer {
@@ -53,7 +162,27 @@ impl Lexer {
             col: 1,
             peeked: None,
             comments: Vec::new(),
+            registry: None,
         }
+    }
+    
+    fn get_or_create_registry(&mut self) -> &mut CommentRegistry {
+        if self.registry.is_none() {
+            // Build registry from collected comments at first access
+            self.registry = Some(CommentRegistry::new(std::mem::take(&mut self.comments)));
+        } else {
+            // Add any newly collected comments to the existing registry
+            if !self.comments.is_empty() {
+                let registry = self.registry.as_mut().unwrap();
+                for comment in std::mem::take(&mut self.comments) {
+                    registry.comments.push(TrackedComment {
+                        info: comment,
+                        consumed: false,
+                    });
+                }
+            }
+        }
+        self.registry.as_mut().unwrap()
     }
 
     fn advance_char(&mut self) {
@@ -401,20 +530,12 @@ fn parse_with_clause(lexer: &mut Lexer) -> Result<WithClause, FormatError> {
 }
 
 fn parse_select_query(lexer: &mut Lexer, with_clause: Option<WithClause>) -> Result<SelectQuery, FormatError> {
+    let start_line = lexer.line;
     lexer.expect_keyword("SELECT")?;
     
-    // Collect any leading comments that appeared before SELECT
-    let mut leading_comments = Vec::new();
-    for comment in &lexer.comments {
-        if !comment.is_hint {
-            leading_comments.push(Comment {
-                text: comment.text.clone(),
-                is_line_comment: comment.is_line_comment,
-                attachment: CommentAttachment::Leading,
-            });
-        }
-    }
-    lexer.comments.clear();
+    // Get registry and collect leading comments
+    let registry = lexer.get_or_create_registry();
+    let leading_comments = registry.consume_leading_comments(start_line);
     
     let distinct = if lexer.is_keyword("DISTINCT")? {
         lexer.expect_keyword("DISTINCT")?;
@@ -423,17 +544,11 @@ fn parse_select_query(lexer: &mut Lexer, with_clause: Option<WithClause>) -> Res
         false
     };
     
-    // NOW check for hint comment - it appears after SELECT but before the select list
-    // When we peek/parse the next token, any hint will be collected
+    // Extract hint comment if any
+    let hint_comment = lexer.get_or_create_registry().get_hint_comment()
+        .map(|text| format_hint_comment(&text));
+    
     let select_list = parse_select_list_with_comments(lexer)?;
-    
-    // Extract hint comment if any was collected
-    let hint_comment = lexer.comments.iter()
-        .find(|c| c.is_hint)
-        .map(|c| format_hint_comment(&c.text));
-    
-    // Clear all comments after extracting hint
-    lexer.comments.clear();
     
     let from = if lexer.is_keyword("FROM")? {
         Some(parse_from_clause(lexer)?)
@@ -471,6 +586,22 @@ fn parse_select_query(lexer: &mut Lexer, with_clause: Option<WithClause>) -> Res
         None
     };
     
+    let end_line = lexer.line;
+    
+    // Collect any unconsumed comments in this query's range as fallback trailing comments
+    let mut fallback_comments = Vec::new();
+    let registry = lexer.get_or_create_registry();
+    let unconsumed = registry.unconsumed_in_range(start_line, end_line);
+    for (_, tracked) in unconsumed {
+        fallback_comments.push(Comment {
+            text: tracked.info.text.clone(),
+            is_line_comment: tracked.info.is_line_comment,
+            attachment: CommentAttachment::TrailingOwnLine,
+        });
+    }
+    // Mark them as consumed
+    registry.consume_range(start_line, end_line);
+    
     Ok(SelectQuery {
         with_clause,
         distinct,
@@ -483,6 +614,7 @@ fn parse_select_query(lexer: &mut Lexer, with_clause: Option<WithClause>) -> Res
         limit,
         leading_comments,
         hint_comment,
+        fallback_comments,
     })
 }
 
@@ -586,18 +718,8 @@ fn parse_select_list_with_comments(lexer: &mut Lexer) -> Result<Vec<SelectItem>,
 }
 
 fn extract_trailing_comment_for_line(lexer: &mut Lexer, line: usize) -> Option<Comment> {
-    // Find and remove the first line comment that's on the same line
-    if let Some(idx) = lexer.comments.iter().position(|c| {
-        c.is_line_comment && c.line == line
-    }) {
-        let comment = lexer.comments.remove(idx);
-        return Some(Comment {
-            text: comment.text,
-            is_line_comment: true,
-            attachment: CommentAttachment::TrailingInline,
-        });
-    }
-    None
+    // Use registry to find and consume comment
+    lexer.get_or_create_registry().consume_on_line(line, true)
 }
 
 fn parse_expression(lexer: &mut Lexer) -> Result<Expression, FormatError> {
@@ -1831,19 +1953,9 @@ fn parse_frame_bound(lexer: &mut Lexer) -> Result<String, FormatError> {
 
 // Helper function to collect leading comments
 fn collect_leading_comments(lexer: &mut Lexer) -> Vec<Comment> {
-    let comments: Vec<Comment> = lexer.comments.iter()
-        .filter(|c| !c.is_hint)
-        .map(|c| Comment {
-            text: c.text.clone(),
-            is_line_comment: c.is_line_comment,
-            attachment: CommentAttachment::Leading,
-        })
-        .collect();
-    
-    // Clear collected comments
-    lexer.comments.clear();
-    
-    comments
+    let current_line = lexer.line;
+    let registry = lexer.get_or_create_registry();
+    registry.consume_leading_comments(current_line)
 }
 
 // DDL Statement Parsers
