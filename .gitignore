@@ -34,3 +34,7 @@ coverage/
 # Example files
 example.sql
 *_formatted.sql
+
+# Debug files
+debug-*.mjs
+debug-*.js

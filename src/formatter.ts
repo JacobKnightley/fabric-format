@@ -1222,6 +1222,7 @@ export function formatSql(sql: string): string {
         interface PendingComment {
             text: string;
             type: number;
+            wasOnOwnLine: boolean; // True if comment was at start of line (column 0) or preceded by newline
         }
         let pendingComments: PendingComment[] = [];
         
@@ -1233,9 +1234,14 @@ export function formatSql(sql: string): string {
                 if (addSpaceBefore && output.length > 0) {
                     const lastStr = output[output.length - 1];
                     const lastChar = lastStr.charAt(lastStr.length - 1);
-                    // Don't add space after newline, space, or open paren
-                    if (lastChar !== '\n' && lastChar !== ' ' && lastChar !== '(') {
-                        output.push(' ');
+                    // Don't add space after newline or space
+                    // For line comments, add space even after open paren to preserve "( -- comment"
+                    const isLineComment = comment.type === SqlBaseLexer.SIMPLE_COMMENT;
+                    if (lastChar !== '\n' && lastChar !== ' ') {
+                        // Add space after open paren only for line comments (not block comments)
+                        if (lastChar !== '(' || isLineComment) {
+                            output.push(' ');
+                        }
                     }
                 }
                 output.push(comment.text);
@@ -1258,9 +1264,22 @@ export function formatSql(sql: string): string {
                 if (hiddenToken && hiddenToken.channel === 1) {
                     if (hiddenToken.type === SqlBaseLexer.SIMPLE_COMMENT || 
                         hiddenToken.type === SqlBaseLexer.BRACKETED_COMMENT) {
+                        // Check if comment was on its own line by looking at:
+                        // 1. If comment is at column 0
+                        // 2. If there's a newline in whitespace before the comment
+                        let wasOnOwnLine = hiddenToken.column === 0;
+                        if (!wasOnOwnLine && j > 0) {
+                            // Look back to see if there was a newline in preceding whitespace
+                            const prevToken = allOrigTokens[j - 1];
+                            if (prevToken && prevToken.channel === 1 && prevToken.type === SqlBaseLexer.WS) {
+                                wasOnOwnLine = prevToken.text.includes('\n');
+                            }
+                        }
+                        
                         pendingComments.push({
                             text: hiddenToken.text,
-                            type: hiddenToken.type
+                            type: hiddenToken.type,
+                            wasOnOwnLine: wasOnOwnLine
                         });
                     }
                 }
@@ -1306,9 +1325,20 @@ export function formatSql(sql: string): string {
                 token.type === SqlBaseLexer.BRACKETED_COMMENT) {
                 if (!wasAlreadyProcessed) {
                     // This comment wasn't collected by look-ahead, add it now
+                    // Check if comment was on its own line
+                    let wasOnOwnLine = origToken.column === 0;
+                    if (!wasOnOwnLine && i > 0) {
+                        // Look back to see if there was a newline in preceding whitespace
+                        const prevToken = allOrigTokens[i - 1];
+                        if (prevToken && prevToken.channel === 1 && prevToken.type === SqlBaseLexer.WS) {
+                            wasOnOwnLine = prevToken.text.includes('\n');
+                        }
+                    }
+                    
                     pendingComments.push({
                         text: origToken.text,
-                        type: token.type
+                        type: token.type,
+                        wasOnOwnLine: wasOnOwnLine
                     });
                 }
                 continue;
@@ -1727,10 +1757,16 @@ export function formatSql(sql: string): string {
             
             // Apply spacing/newlines
             if (needsNewline) {
-                // ALWAYS output pending comments BEFORE the newline
-                // This keeps comments attached to the preceding content
-                if (pendingComments.length > 0) {
+                // Separate pending comments into inline (attach to previous) and own-line (indent with next token)
+                const inlineComments = pendingComments.filter(c => !c.wasOnOwnLine);
+                const ownLineComments = pendingComments.filter(c => c.wasOnOwnLine);
+                
+                // Output inline comments BEFORE the newline (attached to preceding content)
+                if (inlineComments.length > 0) {
+                    const temp = pendingComments;
+                    pendingComments = inlineComments;
                     outputPendingComments();
+                    pendingComments = temp; // Restore full list for proper cleanup
                 }
                 
                 // Add newline if not already at start of line
@@ -1740,9 +1776,29 @@ export function formatSql(sql: string): string {
                         output.push('\n');
                     }
                 }
+                
+                // Output own-line comments AFTER the newline but WITH the indent
+                if (ownLineComments.length > 0) {
+                    for (const comment of ownLineComments) {
+                        if (indent) output.push(indent);
+                        output.push(comment.text);
+                        // Line comments (SIMPLE_COMMENT) already include the trailing newline
+                        // Block comments on their own line don't
+                        if (comment.type === SqlBaseLexer.BRACKETED_COMMENT && !comment.text.endsWith('\n')) {
+                            output.push('\n');
+                        }
+                    }
+                    pendingComments = [];
+                    // After own-line comments, still need to add indent for the actual token
+                }
+                
+                // Add indent for the next token
                 if (indent) {
                     output.push(indent);
                 }
+                
+                // Clear all pending comments (already output above)
+                pendingComments = [];
             } else {
                 // No newline needed
                 // First, output any pending comments
