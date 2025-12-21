@@ -8,7 +8,9 @@
     "build:antlr": "python scripts/build_antlr_js.py",
     "build:ts": "tsc",
     "build": "npm run build:antlr && npm run build:ts",
-    "test": "node dist/test.js",
+    "test": "node dist/tests/index.js",
+    "test:verbose": "node dist/tests/index.js --verbose",
+    "test:legacy": "node dist/test.js",
     "format": "node dist/cli.js"
   },
   "devDependencies": {

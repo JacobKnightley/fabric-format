@@ -95,6 +95,32 @@ All changes must:
 - Not introduce any hardcoded lists
 - Handle context-sensitive keywords correctly
 
+## Test Structure
+
+Tests are organized into modular suites under `src/tests/`:
+
+```
+src/tests/
+├── framework.ts           # Test framework (TestCase, TestSuite, runner)
+├── index.ts               # Main test runner
+├── basic-select.test.ts   # Basic SELECT queries
+├── casing.test.ts         # Casing rules & aliases
+├── joins.test.ts          # JOIN variants
+├── grouping.test.ts       # GROUP BY/ORDER BY/HAVING
+├── where.test.ts          # WHERE conditions
+├── subqueries.test.ts     # Subqueries, CTEs, set operations
+├── expressions.test.ts    # CASE, CAST, literals, arrays
+├── comments.test.ts       # Comments & hints
+├── ddl.test.ts            # DDL statements
+├── dml.test.ts            # DML statements
+├── spark-features.test.ts # Spark-specific features
+└── utility.test.ts        # Utility commands
+```
+
+**Running tests:**
+- `npm test` - Run all tests (109 tests)
+- `npm run test:verbose` - Run with failure details
+
 ## Key Files
 
 | File | Purpose |
@@ -102,8 +128,10 @@ All changes must:
 | `grammar/SqlBaseLexer.g4` | Source of truth for keywords, operators |
 | `grammar/SqlBaseParser.g4` | Source of truth for grammar rules |
 | `src/formatter.ts` | Main formatting logic (grammar-driven) |
-| `src/test.ts` | E2E tests |
+| `src/tests/` | Modular test suites |
 | `scripts/build_antlr_js.py` | Generates JS parser from grammar |
+| `STYLE_GUIDE.md` | Formatting style reference |
+| `KNOWN_ISSUES.md` | Tracked bugs and limitations |
 
 ## Architecture
 
@@ -135,4 +163,5 @@ Formatted SQL
 - Never add hardcoded keyword/function lists
 - Always use parse tree context for detection
 - Test with context-sensitive examples like `select a.order from t order by x`
-- Run `npm test` to verify all 16 tests pass
+- Run `npm test` to verify all 109 tests pass
+- Add new tests to the appropriate test module

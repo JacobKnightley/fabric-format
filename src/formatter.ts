@@ -110,6 +110,7 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
     // Track CTE/subquery parentheses for indentation
     subqueryOpenParens: Set<number> = new Set();
     subqueryCloseParens: Set<number> = new Set();
+    setOperandParens: Set<number> = new Set(); // Opening parens that need newline (set operation operands)
     
     // Track CTE commas for comma-first formatting
     cteCommas: Set<number> = new Set();
@@ -125,6 +126,27 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
     valuesCommas: Set<number> = new Set();
     setClauseCommas: Set<number> = new Set();
     setKeywordToken: number = -1;
+    
+    // Track CASE expressions with multiple WHEN branches (need multiline)
+    multiWhenCaseTokens: Set<number> = new Set(); // CASE tokens that have multiple WHEN
+    caseWhenTokens: Set<number> = new Set(); // WHEN tokens inside multiline CASE
+    caseElseTokens: Set<number> = new Set(); // ELSE tokens inside multiline CASE
+    caseEndTokens: Set<number> = new Set(); // END tokens inside multiline CASE
+    
+    // Track GROUPING SETS/ROLLUP/CUBE contexts (suppress comma-first inside)
+    groupingAnalyticsParens: Set<number> = new Set(); // ( after GROUPING SETS/ROLLUP/CUBE
+    insideGroupingAnalytics: boolean = false; // Track if we're currently inside one
+    
+    // Track SET configuration contexts (preserve config key casing)
+    setConfigTokens: Set<number> = new Set();
+    
+    // Track MERGE statement clause tokens (USING, ON, WHEN)
+    mergeUsingTokens: Set<number> = new Set();
+    mergeOnTokens: Set<number> = new Set();
+    mergeWhenTokens: Set<number> = new Set();
+    
+    // Track LATERAL VIEW column list commas (should not have space before)
+    lateralViewCommas: Set<number> = new Set();
     
     // Track current SELECT token for associating with list items
     private currentSelectToken: number = -1;
@@ -194,8 +216,10 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
     
     visitLateralView(ctx: any): any {
         // LATERAL VIEW explode(...) - mark the function name as function call
-        // Grammar: LATERAL VIEW (OUTER)? qualifiedName LEFT_PAREN ...
+        // Grammar: LATERAL VIEW (OUTER)? qualifiedName LEFT_PAREN (expression (COMMA expression)*)? 
+        //          RIGHT_PAREN tblName=identifier (AS? colName+=identifier (COMMA colName+=identifier)*)?
         if (ctx.children) {
+            let foundRightParen = false;
             for (let i = 0; i < ctx.children.length; i++) {
                 const child = ctx.children[i];
                 // Find qualifiedName (the function name like 'explode')
@@ -203,12 +227,115 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
                     const ruleName = SqlBaseParser.ruleNames[child.ruleIndex];
                     if (ruleName === 'qualifiedName' && child.start) {
                         this.functionCallTokens.add(child.start.tokenIndex);
-                        break;
+                    }
+                }
+                // Track RIGHT_PAREN - commas after this are in the column name list
+                if (child.symbol) {
+                    const symName = SqlBaseLexer.symbolicNames[child.symbol.type];
+                    if (symName === 'RIGHT_PAREN') {
+                        foundRightParen = true;
+                    }
+                    // Mark commas after the RIGHT_PAREN as LATERAL VIEW commas
+                    if (foundRightParen && symName === 'COMMA') {
+                        this.lateralViewCommas.add(child.symbol.tokenIndex);
                     }
                 }
             }
         }
         return this.visitChildren(ctx);
+    }
+    
+    // ========== CASE EXPRESSION CONTEXTS ==========
+    // Handle CASE expressions with multiple WHEN branches
+    
+    visitSearchedCase(ctx: any): any {
+        // CASE whenClause+ (ELSE elseExpression)? END
+        this._analyzeCaseExpression(ctx);
+        return this.visitChildren(ctx);
+    }
+    
+    visitSimpleCase(ctx: any): any {
+        // CASE value=expression whenClause+ (ELSE elseExpression)? END
+        this._analyzeCaseExpression(ctx);
+        return this.visitChildren(ctx);
+    }
+    
+    private _analyzeCaseExpression(ctx: any): void {
+        if (!ctx.children) return;
+        
+        // Count WHEN clauses
+        let whenCount = 0;
+        let caseToken: any = null;
+        let elseToken: any = null;
+        let endToken: any = null;
+        const whenTokens: any[] = [];
+        
+        for (const child of ctx.children) {
+            if (child.symbol) {
+                const symName = SqlBaseLexer.symbolicNames[child.symbol.type];
+                if (symName === 'CASE') {
+                    caseToken = child.symbol;
+                } else if (symName === 'ELSE') {
+                    elseToken = child.symbol;
+                } else if (symName === 'END') {
+                    endToken = child.symbol;
+                } else if (symName === 'WHEN') {
+                    whenCount++;
+                    whenTokens.push(child.symbol);
+                }
+            }
+            // Also count whenClause rule contexts
+            if (child.ruleIndex !== undefined) {
+                const ruleName = SqlBaseParser.ruleNames[child.ruleIndex];
+                if (ruleName === 'whenClause') {
+                    // Find WHEN token in whenClause
+                    const whenToken = this._findTokenInContext(child, 'WHEN');
+                    if (whenToken && !whenTokens.find(t => t.tokenIndex === whenToken.tokenIndex)) {
+                        whenCount++;
+                        whenTokens.push(whenToken);
+                    }
+                }
+            }
+        }
+        
+        // If multiple WHEN branches, mark for multiline formatting
+        if (whenCount > 1 && caseToken) {
+            this.multiWhenCaseTokens.add(caseToken.tokenIndex);
+            // Mark each WHEN token
+            for (const whenToken of whenTokens) {
+                this.caseWhenTokens.add(whenToken.tokenIndex);
+            }
+            // Mark ELSE token if present
+            if (elseToken) {
+                this.caseElseTokens.add(elseToken.tokenIndex);
+            }
+            // Mark END token
+            if (endToken) {
+                this.caseEndTokens.add(endToken.tokenIndex);
+            }
+            
+            // Also mark the parent SELECT as multiline if we're inside one
+            if (this.currentSelectToken >= 0) {
+                this.multiItemClauses.add(this.currentSelectToken);
+            }
+        }
+    }
+    
+    private _findTokenInContext(ctx: any, symbolicName: string): any {
+        if (!ctx) return null;
+        if (ctx.symbol) {
+            const symName = SqlBaseLexer.symbolicNames[ctx.symbol.type];
+            if (symName === symbolicName) {
+                return ctx.symbol;
+            }
+        }
+        if (ctx.children) {
+            for (const child of ctx.children) {
+                const found = this._findTokenInContext(child, symbolicName);
+                if (found) return found;
+            }
+        }
+        return null;
     }
     
     // ========== CLAUSE-STARTING CONTEXTS ==========
@@ -222,12 +349,74 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
     visitAggregationClause(ctx: any): any {
         // GROUP BY clause
         this._markClauseStart(ctx);
-        // Mark commas in GROUP BY list
-        const commaCount = this._markCommasAtLevel(ctx);
+        // Mark commas in GROUP BY list (but not inside GROUPING SETS/ROLLUP/CUBE)
+        const commaCount = this._markListCommasExcludingGroupingAnalytics(ctx);
+        // Only make GROUP BY multiline if there are actual list commas (not inside groupingAnalytics)
         if (commaCount > 0 && ctx.start) {
-            this.multiItemClauses.add(ctx.start.tokenIndex);
+            // Check if any commas were actually marked (some might have been skipped due to groupingAnalytics)
+            // We can't easily check this here, so we'll use a different approach:
+            // Count how many commas in children are NOT in groupingAnalytics contexts
+            let actualCommaCount = 0;
+            if (ctx.children) {
+                for (const child of ctx.children) {
+                    if (child.symbol && child.symbol.type === getTokenType('COMMA')) {
+                        if (this.listItemCommas.has(child.symbol.tokenIndex)) {
+                            actualCommaCount++;
+                        }
+                    }
+                }
+            }
+            if (actualCommaCount > 0) {
+                this.multiItemClauses.add(ctx.start.tokenIndex);
+            }
         }
         return this.visitChildren(ctx);
+    }
+    
+    visitGroupingAnalytics(ctx: any): any {
+        // GROUPING SETS/ROLLUP/CUBE - don't mark commas as list items
+        // Grammar: (ROLLUP | CUBE) LEFT_PAREN groupingSet (COMMA groupingSet)* RIGHT_PAREN
+        //       or GROUPING SETS LEFT_PAREN groupingElement (COMMA groupingElement)* RIGHT_PAREN
+        
+        // Check if this is ROLLUP or CUBE (no space before paren) or GROUPING SETS (space before paren)
+        let isRollupOrCube = false;
+        if (ctx.children) {
+            for (const child of ctx.children) {
+                if (child.symbol) {
+                    const symName = SqlBaseLexer.symbolicNames[child.symbol.type];
+                    if (symName === 'ROLLUP' || symName === 'CUBE') {
+                        isRollupOrCube = true;
+                    } else if (symName === 'LEFT_PAREN') {
+                        this.groupingAnalyticsParens.add(child.symbol.tokenIndex);
+                        // Mark this paren as function-like (no space before) for ROLLUP/CUBE
+                        if (isRollupOrCube) {
+                            // We need to handle this in the formatting logic
+                            // Mark the preceding token as a function call
+                            const parenIndex = child.symbol.tokenIndex;
+                            // Find the preceding ROLLUP or CUBE token
+                            for (let i = 0; i < ctx.children.length; i++) {
+                                const c = ctx.children[i];
+                                if (c.symbol) {
+                                    const sn = SqlBaseLexer.symbolicNames[c.symbol.type];
+                                    if ((sn === 'ROLLUP' || sn === 'CUBE') && c.symbol.tokenIndex < parenIndex) {
+                                        this.functionCallTokens.add(c.symbol.tokenIndex);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // Visit children but don't mark commas as list commas
+        const wasInside = this.insideGroupingAnalytics;
+        this.insideGroupingAnalytics = true;
+        const result = this.visitChildren(ctx);
+        this.insideGroupingAnalytics = wasInside;
+        return result;
     }
     
     visitQueryOrganization(ctx: any): any {
@@ -249,7 +438,7 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
             }
         }
         // Mark commas in ORDER BY list
-        const commaCount = this._markCommasAtLevel(ctx);
+        const commaCount = this._markListCommasExcludingGroupingAnalytics(ctx);
         if (commaCount > 0 && orderTokenIndex !== null) {
             this.multiItemClauses.add(orderTokenIndex);
         }
@@ -316,18 +505,45 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
     }
     
     visitSetOperation(ctx: any): any {
-        // UNION, EXCEPT, INTERSECT - find the operator token
+        // UNION, EXCEPT, INTERSECT - find the operator token and mark subquery parens
         if (ctx.children) {
+            let foundSetOperator = false;
             for (const child of ctx.children) {
                 if (child.symbol) {
                     const symName = SqlBaseLexer.symbolicNames[child.symbol.type];
                     if (symName === 'UNION' || symName === 'EXCEPT' || symName === 'INTERSECT') {
                         this.clauseStartTokens.add(child.symbol.tokenIndex);
+                        foundSetOperator = true;
+                    }
+                } else {
+                    // Check for SubqueryContext nested inside QueryTermDefaultContext
+                    // that comes after the set operator
+                    if (foundSetOperator) {
+                        const subquery = this._findSubqueryContext(child);
+                        if (subquery && subquery.start) {
+                            this.setOperandParens.add(subquery.start.tokenIndex);
+                        }
                     }
                 }
             }
         }
         return this.visitChildren(ctx);
+    }
+    
+    private _findSubqueryContext(ctx: any): any {
+        // Find SubqueryContext in the children tree
+        if (!ctx) return null;
+        const className = ctx.constructor?.name || '';
+        if (className === 'SubqueryContext') return ctx;
+        if (ctx.children) {
+            for (const child of ctx.children) {
+                if (!child.symbol) { // Only recurse into rule contexts
+                    const found = this._findSubqueryContext(child);
+                    if (found) return found;
+                }
+            }
+        }
+        return null;
     }
     
     visitSelectClause(ctx: any): any {
@@ -370,6 +586,17 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
     // ========== LIST CONTEXTS (SELECT columns, GROUP BY, ORDER BY) ==========
     
     visitNamedExpressionSeq(ctx: any): any {
+        // namedExpressionSeq appears in SELECT column list but also inside PIVOT aggregates
+        // Only apply comma-first formatting for actual SELECT columns
+        // Check if parent is pivotClause, unpivotClause, or lateral view
+        const parentClass = ctx.parentCtx?.constructor?.name || '';
+        if (parentClass === 'PivotClauseContext' || 
+            parentClass === 'UnpivotClauseContext' ||
+            parentClass === 'LateralViewContext') {
+            // Skip list formatting for these contexts
+            return this.visitChildren(ctx);
+        }
+        
         // SELECT column list
         const hasMultiple = this._markListContext(ctx);
         if (hasMultiple && this.currentSelectToken >= 0) {
@@ -384,20 +611,29 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
         return this.visitChildren(ctx);
     }
     
-    private _markCommasAtLevel(ctx: any): number {
+    private _markListCommasExcludingGroupingAnalytics(ctx: any): number {
         // Mark commas at this level and recursively in children
         // Returns count of commas found
+        // Excludes commas that are direct children of groupingAnalytics contexts
         let count = 0;
         if (!ctx || !ctx.children) return 0;
+        
+        // Check if current context is groupingAnalytics
+        const isGroupingAnalytics = ctx.ruleIndex !== undefined && 
+            SqlBaseParser.ruleNames[ctx.ruleIndex] === 'groupingAnalytics';
+        
         for (const child of ctx.children) {
             if (child.symbol) {
                 if (child.symbol.type === getTokenType('COMMA')) {
-                    this.listItemCommas.add(child.symbol.tokenIndex);
+                    // Only mark as list comma if NOT directly inside groupingAnalytics
+                    if (!isGroupingAnalytics) {
+                        this.listItemCommas.add(child.symbol.tokenIndex);
+                    }
                     count++;
                 }
             } else if (child.ruleIndex !== undefined) {
                 // Recurse into rule contexts
-                count += this._markCommasAtLevel(child);
+                count += this._markListCommasExcludingGroupingAnalytics(child);
             }
         }
         return count;
@@ -529,6 +765,12 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
     
     visitSubqueryExpression(ctx: any): any {
         // Scalar subquery: (SELECT ...)
+        this._markSubqueryParens(ctx);
+        return this.visitChildren(ctx);
+    }
+    
+    visitSubquery(ctx: any): any {
+        // Parenthesized query in set operations: (SELECT ...) UNION ALL (SELECT ...)
         this._markSubqueryParens(ctx);
         return this.visitChildren(ctx);
     }
@@ -680,6 +922,74 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
         return commaCount;
     }
 
+    // ========== SET CONFIGURATION ==========
+    // SET spark.sql.shuffle.partitions = 200
+    // The config key should preserve lowercase casing
+    
+    visitSetConfiguration(ctx: any): any {
+        // Mark all tokens after SET as identifiers to preserve casing
+        this._markSetConfigTokens(ctx);
+        return this.visitChildren(ctx);
+    }
+    
+    private _markSetConfigTokens(ctx: any): void {
+        if (!ctx || !ctx.children) return;
+        let foundSet = false;
+        for (const child of ctx.children) {
+            if (child.symbol) {
+                const symName = SqlBaseLexer.symbolicNames[child.symbol.type];
+                if (symName === 'SET') {
+                    foundSet = true;
+                } else if (foundSet) {
+                    // Mark all tokens after SET as config tokens (preserve casing)
+                    this.setConfigTokens.add(child.symbol.tokenIndex);
+                }
+            } else if (child.children && foundSet) {
+                // Recursively mark nested tokens
+                this._markSetConfigTokensRecursive(child);
+            }
+        }
+    }
+    
+    private _markSetConfigTokensRecursive(ctx: any): void {
+        if (!ctx) return;
+        if (ctx.symbol) {
+            this.setConfigTokens.add(ctx.symbol.tokenIndex);
+        }
+        if (ctx.children) {
+            for (const child of ctx.children) {
+                this._markSetConfigTokensRecursive(child);
+            }
+        }
+    }
+    
+    // ========== MERGE STATEMENT ==========
+    // MERGE INTO target USING source ON condition WHEN MATCHED ...
+    // USING, ON, and WHEN should start new lines
+    
+    visitMergeIntoTable(ctx: any): any {
+        this._markMergeClauses(ctx);
+        return this.visitChildren(ctx);
+    }
+    
+    private _markMergeClauses(ctx: any): void {
+        if (!ctx || !ctx.children) return;
+        for (const child of ctx.children) {
+            if (child.symbol) {
+                const symName = SqlBaseLexer.symbolicNames[child.symbol.type];
+                if (symName === 'USING') {
+                    this.mergeUsingTokens.add(child.symbol.tokenIndex);
+                } else if (symName === 'ON') {
+                    this.mergeOnTokens.add(child.symbol.tokenIndex);
+                } else if (symName === 'WHEN') {
+                    this.mergeWhenTokens.add(child.symbol.tokenIndex);
+                }
+            } else if (child.children) {
+                this._markMergeClauses(child);
+            }
+        }
+    }
+
     // ========== SUBQUERY TRACKING ==========
     
     visitQuerySpecification(ctx: any): any {
@@ -735,6 +1045,19 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
     
     private _markCommasInContext(ctx: any): void {
         if (!ctx || !ctx.children) return;
+        
+        // Don't descend into contexts where commas are NOT list separators
+        // Check constructor name because labeled alternatives (like #functionCall)
+        // create distinct context classes but share the same ruleIndex
+        const className = ctx.constructor?.name || '';
+        
+        // Skip function calls - commas there are argument separators, not list item separators
+        if (className === 'FunctionCallContext') return;
+        // Skip pivot/unpivot clauses - commas there have their own semantics  
+        if (className === 'PivotClauseContext' || className === 'UnpivotClauseContext') return;
+        // Skip lateral view - commas there are column name separators
+        if (className === 'LateralViewContext') return;
+        
         for (const child of ctx.children) {
             if (child.symbol) {
                 if (child.symbol.type === getTokenType('COMMA')) {
@@ -757,25 +1080,33 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
         }
     }
     
-    private _countConditionOperators(ctx: any): number {
+    private _countConditionOperators(ctx: any, parenDepth: number = 0): number {
         let count = 0;
         if (!ctx) return count;
         
-        // Recursively count AND/OR tokens (but exclude BETWEEN's AND)
+        // Recursively count AND/OR tokens (but exclude BETWEEN's AND and those inside parentheses)
         if (ctx.children) {
+            let currentParenDepth = parenDepth;
             for (const child of ctx.children) {
                 if (child.symbol) {
                     const symbolicName = SqlBaseLexer.symbolicNames[child.symbol.type];
-                    if (symbolicName === 'AND' || symbolicName === 'OR') {
+                    
+                    // Track parenthesis depth
+                    if (symbolicName === 'LEFT_PAREN') {
+                        currentParenDepth++;
+                    } else if (symbolicName === 'RIGHT_PAREN') {
+                        currentParenDepth--;
+                    } else if (symbolicName === 'AND' || symbolicName === 'OR') {
                         // Don't count AND that's part of BETWEEN x AND y
-                        if (!this.betweenAndTokens.has(child.symbol.tokenIndex)) {
+                        // Don't count AND/OR inside parentheses - those should stay inline
+                        if (!this.betweenAndTokens.has(child.symbol.tokenIndex) && currentParenDepth === 0) {
                             count++;
                             this.conditionOperators.add(child.symbol.tokenIndex);
                         }
                     }
                 }
-                // Recurse into children
-                count += this._countConditionOperators(child);
+                // Recurse into children, passing current paren depth
+                count += this._countConditionOperators(child, currentParenDepth);
             }
         }
         return count;
@@ -878,39 +1209,110 @@ export function formatSql(sql: string): string {
         // Track if we just output a comma on its own line (comma-first style)
         let justOutputCommaFirstStyle = false;
         
+        // Track if current +/- operator is unary (determined based on previous token)
+        let currentTokenIsUnaryOperator = false;
+        let prevTokenWasUnaryOperator = false; // Track if PREVIOUS token was unary +/-
+        let prevTokenText = ''; // Track previous meaningful token for unary detection
+        let prevTokenType = -1;
+        
+        // Track CASE expression depth for indentation
+        let caseDepth = 0;
+        
+        // Collect pending comments to be output at the right time
+        interface PendingComment {
+            text: string;
+            type: number;
+        }
+        let pendingComments: PendingComment[] = [];
+        
+        // Helper to output pending comments (returns true if any were output, and whether last was multiline block comment)
+        const outputPendingComments = (addSpaceBefore: boolean = true): { outputAny: boolean, lastWasMultilineBlock: boolean } => {
+            if (pendingComments.length === 0) return { outputAny: false, lastWasMultilineBlock: false };
+            let lastWasMultilineBlock = false;
+            for (const comment of pendingComments) {
+                if (addSpaceBefore && output.length > 0) {
+                    const lastStr = output[output.length - 1];
+                    const lastChar = lastStr.charAt(lastStr.length - 1);
+                    // Don't add space after newline, space, or open paren
+                    if (lastChar !== '\n' && lastChar !== ' ' && lastChar !== '(') {
+                        output.push(' ');
+                    }
+                }
+                output.push(comment.text);
+                // Track if this is a multi-line block comment
+                lastWasMultilineBlock = comment.type === SqlBaseLexer.BRACKETED_COMMENT && comment.text.includes('\n');
+                // If it's a multi-line block comment, add a newline after it
+                if (lastWasMultilineBlock) {
+                    output.push('\n');
+                }
+                addSpaceBefore = true; // After first comment, always add space
+            }
+            pendingComments = [];
+            return { outputAny: true, lastWasMultilineBlock };
+        };
+        
+        // Helper to collect comments from a range of hidden tokens
+        const collectCommentsFromRange = (startIdx: number, endIdx: number): void => {
+            for (let j = startIdx; j < endIdx; j++) {
+                const hiddenToken = allOrigTokens[j];
+                if (hiddenToken && hiddenToken.channel === 1) {
+                    if (hiddenToken.type === SqlBaseLexer.SIMPLE_COMMENT || 
+                        hiddenToken.type === SqlBaseLexer.BRACKETED_COMMENT) {
+                        pendingComments.push({
+                            text: hiddenToken.text,
+                            type: hiddenToken.type
+                        });
+                    }
+                }
+            }
+        };
+        
+        // Helper to find next non-WS, non-comment token index
+        const findNextNonWsTokenIndex = (startIdx: number): number => {
+            for (let j = startIdx; j < tokenList.length; j++) {
+                const tok = tokenList[j];
+                // Skip WS, EOF, and comment tokens (which are on hidden channel)
+                if (tok.type !== SqlBaseLexer.WS && 
+                    tok.type !== antlr4.Token.EOF &&
+                    tok.type !== SqlBaseLexer.SIMPLE_COMMENT &&
+                    tok.type !== SqlBaseLexer.BRACKETED_COMMENT) {
+                    return j;
+                }
+            }
+            return -1;
+        };
+        
         for (let i = 0; i < tokenList.length && i < allOrigTokens.length; i++) {
             const token = tokenList[i];
             const origToken = allOrigTokens[i];
             
             if (token.type === antlr4.Token.EOF) continue;
             
-            // Process any hidden tokens (comments) that appear before this token
-            // by checking tokens between lastProcessedIndex and current i
-            for (let j = lastProcessedIndex + 1; j < i; j++) {
-                const hiddenToken = allOrigTokens[j];
-                if (hiddenToken.channel === 1) { // HIDDEN channel
-                    if (hiddenToken.type === SqlBaseLexer.SIMPLE_COMMENT || 
-                        hiddenToken.type === SqlBaseLexer.BRACKETED_COMMENT) {
-                        // Add space before comment if not at start and not already on new line
-                        if (output.length > 0) {
-                            const lastStr = output[output.length - 1];
-                            if (lastStr.charAt(lastStr.length - 1) !== '\n') {
-                                output.push(' ');
-                            }
-                        }
-                        output.push(hiddenToken.text);
-                        // SIMPLE_COMMENT already includes its trailing newline
-                        // BRACKETED_COMMENT needs a newline after it
-                        if (hiddenToken.type === SqlBaseLexer.BRACKETED_COMMENT && 
-                            !hiddenToken.text.endsWith('\n')) {
-                            output.push('\n');
-                        }
-                    }
-                }
+            // Collect any hidden tokens (comments) that appear before this token
+            // They will be output at the appropriate time based on formatting decisions
+            // Only collect if we haven't already processed ahead (e.g., from look-ahead in comma handling)
+            const wasAlreadyProcessed = lastProcessedIndex >= i;
+            if (!wasAlreadyProcessed) {
+                collectCommentsFromRange(lastProcessedIndex + 1, i);
             }
-            lastProcessedIndex = i;
+            lastProcessedIndex = Math.max(lastProcessedIndex, i);
             
+            // Skip WS tokens
             if (token.type === SqlBaseLexer.WS) continue;
+            
+            // Handle comment tokens directly (in case the loop reaches them)
+            // Only add if not already collected by look-ahead
+            if (token.type === SqlBaseLexer.SIMPLE_COMMENT ||
+                token.type === SqlBaseLexer.BRACKETED_COMMENT) {
+                if (!wasAlreadyProcessed) {
+                    // This comment wasn't collected by look-ahead, add it now
+                    pendingComments.push({
+                        text: origToken.text,
+                        type: token.type
+                    });
+                }
+                continue;
+            }
             
             const text = origToken.text;
             const tokenType = token.type;
@@ -968,6 +1370,7 @@ export function formatSql(sql: string): string {
             const isJoinOn = analyzer.joinOnTokens.has(tokenIndex);
             const isSubqueryOpenParen = analyzer.subqueryOpenParens.has(tokenIndex);
             const isSubqueryCloseParen = analyzer.subqueryCloseParens.has(tokenIndex);
+            const isSetOperandParen = analyzer.setOperandParens.has(tokenIndex);
             const isCteComma = analyzer.cteCommas.has(tokenIndex);
             const isDdlComma = analyzer.ddlColumnCommas.has(tokenIndex);
             const isDdlOpenParen = analyzer.ddlOpenParens.has(tokenIndex);
@@ -976,11 +1379,55 @@ export function formatSql(sql: string): string {
             const isValuesComma = analyzer.valuesCommas.has(tokenIndex);
             const isSetComma = analyzer.setClauseCommas.has(tokenIndex);
             const isSetKeyword = tokenIndex === analyzer.setKeywordToken;
+            const isLateralViewComma = analyzer.lateralViewCommas.has(tokenIndex);
+            
+            // Track CASE expression tokens
+            const isMultiWhenCase = analyzer.multiWhenCaseTokens.has(tokenIndex);
+            const isCaseWhen = analyzer.caseWhenTokens.has(tokenIndex);
+            const isCaseElse = analyzer.caseElseTokens.has(tokenIndex);
+            const isCaseEnd = analyzer.caseEndTokens.has(tokenIndex);
+            
+            // Detect if current token is a unary +/- operator
+            // Unary if it comes after: (, [, comma, or operators/keywords that start expressions
+            currentTokenIsUnaryOperator = false;
+            if (text === '+' || text === '-') {
+                // Check previous token to determine if this is unary
+                if (prevTokenText === '' || prevTokenText === '(' || prevTokenText === '[' || prevTokenText === ',') {
+                    currentTokenIsUnaryOperator = true;
+                } else {
+                    // Check if previous token was a keyword or operator that expects an expression
+                    const prevSymbolic = prevTokenType >= 0 ? SqlBaseLexer.symbolicNames[prevTokenType] : null;
+                    const expectsExpression = prevSymbolic && (
+                        prevSymbolic === 'SELECT' || prevSymbolic === 'WHERE' || prevSymbolic === 'HAVING' ||
+                        prevSymbolic === 'ON' || prevSymbolic === 'AND' || prevSymbolic === 'OR' ||
+                        prevSymbolic === 'WHEN' || prevSymbolic === 'THEN' || prevSymbolic === 'ELSE' ||
+                        prevSymbolic === 'RETURN' || prevSymbolic === 'CASE' ||
+                        // Comparison and assignment operators
+                        prevSymbolic === 'EQ' || prevSymbolic === 'NEQ' || prevSymbolic === 'LT' ||
+                        prevSymbolic === 'LTE' || prevSymbolic === 'GT' || prevSymbolic === 'GTE' ||
+                        prevSymbolic === 'NSEQ' ||
+                        // Arithmetic operators
+                        prevSymbolic === 'PLUS' || prevSymbolic === 'MINUS' || prevSymbolic === 'ASTERISK' ||
+                        prevSymbolic === 'SLASH' || prevSymbolic === 'PERCENT' || prevSymbolic === 'DIV' ||
+                        // Other
+                        prevSymbolic === 'AS' || prevSymbolic === 'SET'
+                    );
+                    if (expectsExpression) {
+                        currentTokenIsUnaryOperator = true;
+                    }
+                }
+            }
             
             // Determine output text based on context
             let outputText: string;
             
-            if (isFunctionCall) {
+            // Check if this is a SET config token (preserve casing)
+            const isSetConfigToken = analyzer.setConfigTokens.has(tokenIndex);
+            
+            if (isSetConfigToken) {
+                // SET config key/value → preserve original casing
+                outputText = text;
+            } else if (isFunctionCall) {
                 // Check if it's a built-in function using the authoritative list from Spark source
                 const funcLower = text.toLowerCase();
                 const isBuiltInFromList = SPARK_BUILTIN_FUNCTIONS.has(funcLower);
@@ -1091,8 +1538,48 @@ export function formatSql(sql: string): string {
                 isFirstListItem = true;
             }
             
+            // Handle multi-WHEN CASE expressions
+            if (isCaseWhen) {
+                // WHEN in multi-WHEN CASE - newline with indent
+                needsNewline = true;
+                // WHEN should be indented 3 spaces relative to CASE
+                // CASE is at base indent + 5 (first item in SELECT)
+                // WHEN should be at base indent + 8 (CASE indent + 3)
+                indent = getBaseIndent(subqueryDepth + ddlDepth) + '        '; // 8-space indent (5 for first item + 3 for WHEN)
+            } else if (isCaseElse) {
+                // ELSE in multi-WHEN CASE - same indent as WHEN
+                needsNewline = true;
+                indent = getBaseIndent(subqueryDepth + ddlDepth) + '        '; // 8-space indent
+            } else if (isCaseEnd) {
+                // END in multi-WHEN CASE - same indent as CASE (5 spaces)
+                needsNewline = true;
+                indent = getBaseIndent(subqueryDepth + ddlDepth) + '     '; // 5-space indent (matches CASE)
+            }
+            
+            // MERGE clause handling - USING, ON, WHEN on new lines
+            const isMergeUsing = analyzer.mergeUsingTokens.has(tokenIndex);
+            const isMergeOn = analyzer.mergeOnTokens.has(tokenIndex);
+            const isMergeWhen = analyzer.mergeWhenTokens.has(tokenIndex);
+            
+            if (isMergeUsing && !isFirstNonWsToken) {
+                needsNewline = true;
+                indent = getBaseIndent(subqueryDepth + ddlDepth);
+            } else if (isMergeOn && !isFirstNonWsToken) {
+                needsNewline = true;
+                indent = getBaseIndent(subqueryDepth + ddlDepth);
+            } else if (isMergeWhen && !isFirstNonWsToken) {
+                needsNewline = true;
+                indent = getBaseIndent(subqueryDepth + ddlDepth);
+            }
+            
             // Clause start gets newline (unless it's the first token)
             if (!isFirstNonWsToken && isClauseStart && !isInIdentifierContext) {
+                needsNewline = true;
+                indent = getBaseIndent(subqueryDepth + ddlDepth);
+            }
+            
+            // Set operation operand parens need newline before them (e.g., UNION ALL (\n    SELECT...))
+            if (isSetOperandParen && !isFirstNonWsToken) {
                 needsNewline = true;
                 indent = getBaseIndent(subqueryDepth + ddlDepth);
             }
@@ -1117,6 +1604,15 @@ export function formatSql(sql: string): string {
                 indent = getBaseIndent(subqueryDepth + ddlDepth) + '    '; // 4-space indent for comma
                 isFirstListItem = false;
                 justOutputCommaFirstStyle = true; // Flag to skip space after comma
+                
+                // Look ahead: collect any comments between this comma and the next token
+                // These comments semantically belong to the previous token, so output them
+                // before the comma's newline
+                const nextIdx = findNextNonWsTokenIndex(i + 1);
+                if (nextIdx > 0) {
+                    collectCommentsFromRange(i + 1, nextIdx);
+                    lastProcessedIndex = nextIdx - 1; // Skip these tokens in next iteration
+                }
             }
             
             // CTE comma handling (comma-first for multiple CTEs)
@@ -1124,6 +1620,13 @@ export function formatSql(sql: string): string {
                 needsNewline = true;
                 indent = ''; // No indent, comma at start of line (CTEs at top level)
                 justOutputCommaFirstStyle = true;
+                
+                // Look ahead for comments
+                const nextIdx = findNextNonWsTokenIndex(i + 1);
+                if (nextIdx > 0) {
+                    collectCommentsFromRange(i + 1, nextIdx);
+                    lastProcessedIndex = nextIdx - 1;
+                }
             }
             
             // DDL column list comma handling
@@ -1132,6 +1635,13 @@ export function formatSql(sql: string): string {
                 // DDL commas are at the same level as the column definitions, not indented further
                 indent = getBaseIndent(subqueryDepth) + '    '; // 4-space indent for comma (ddlDepth already accounts for being inside parens)
                 justOutputCommaFirstStyle = true;
+                
+                // Look ahead for comments
+                const nextIdx = findNextNonWsTokenIndex(i + 1);
+                if (nextIdx > 0) {
+                    collectCommentsFromRange(i + 1, nextIdx);
+                    lastProcessedIndex = nextIdx - 1;
+                }
             }
             
             // VALUES comma handling (between value rows)
@@ -1139,6 +1649,13 @@ export function formatSql(sql: string): string {
                 needsNewline = true;
                 indent = getBaseIndent(subqueryDepth + ddlDepth); // No extra indent, comma at start
                 justOutputCommaFirstStyle = true;
+                
+                // Look ahead for comments
+                const nextIdx = findNextNonWsTokenIndex(i + 1);
+                if (nextIdx > 0) {
+                    collectCommentsFromRange(i + 1, nextIdx);
+                    lastProcessedIndex = nextIdx - 1;
+                }
             }
             
             // SET clause comma handling
@@ -1146,6 +1663,13 @@ export function formatSql(sql: string): string {
                 needsNewline = true;
                 indent = getBaseIndent(subqueryDepth + ddlDepth) + '    '; // 4-space indent for comma
                 justOutputCommaFirstStyle = true;
+                
+                // Look ahead for comments
+                const nextIdx = findNextNonWsTokenIndex(i + 1);
+                if (nextIdx > 0) {
+                    collectCommentsFromRange(i + 1, nextIdx);
+                    lastProcessedIndex = nextIdx - 1;
+                }
             }
             
             // Condition operator handling (AND/OR in WHERE/HAVING) - but not BETWEEN's AND
@@ -1203,6 +1727,12 @@ export function formatSql(sql: string): string {
             
             // Apply spacing/newlines
             if (needsNewline) {
+                // ALWAYS output pending comments BEFORE the newline
+                // This keeps comments attached to the preceding content
+                if (pendingComments.length > 0) {
+                    outputPendingComments();
+                }
+                
                 // Add newline if not already at start of line
                 if (output.length > 0) {
                     const lastStr = output[output.length - 1];
@@ -1213,36 +1743,54 @@ export function formatSql(sql: string): string {
                 if (indent) {
                     output.push(indent);
                 }
-            } else if (output.length > 0) {
-                const lastStr = output[output.length - 1];
-                const lastChar = lastStr.charAt(lastStr.length - 1);
+            } else {
+                // No newline needed
+                // First, output any pending comments
+                const hadComments = pendingComments.length > 0;
+                if (hadComments) {
+                    // If this is the first token, don't add space before leading comments
+                    outputPendingComments(output.length > 0);
+                }
                 
-                // Double-colon cast: no space around ::
-                const isDoubleColon = text === '::' || lastChar === ':' && lastStr.endsWith('::');
-                const prevIsDoubleColon = lastStr.endsWith('::');
+                // Now handle spacing before the current token
+                if (output.length > 0) {
+                    const lastStr = output[output.length - 1];
+                    const lastChar = lastStr.charAt(lastStr.length - 1);
                 
-                // Unary operators: no space after - or + when in unary position
-                // Unary position: after (, ,, or at start of expression context
-                const prevIsUnaryOperator = (lastChar === '-' || lastChar === '+') && 
-                    (lastStr.length === 1 || /[(\[,]$/.test(lastStr.slice(0, -1)) || lastStr.endsWith(' -') || lastStr.endsWith(' +') || lastStr.endsWith('\n-') || lastStr.endsWith('\n+'));
-                
-                // Skip space in certain cases
-                const skipSpace = lastChar === '(' || lastChar === '.' || lastChar === '\n' ||
-                    text === ')' || text === '.' ||
-                    text === '::' || prevIsDoubleColon || // No space around ::
-                    (text === '(' && (prevWasFunctionName || prevWasBuiltInFunctionKeyword)) || // No space before ( after function
-                    (text === ',' && insideParens > 0) || // No space before comma inside parens
-                    justOutputCommaFirstStyle || // No space after comma in comma-first style
-                    afterWhereKeyword || afterHavingKeyword || // No space before first condition in multiline WHERE/HAVING
-                    prevIsUnaryOperator; // No space after unary - or +
+                    // Double-colon cast: no space around ::
+                    const isDoubleColon = text === '::' || lastChar === ':' && lastStr.endsWith('::');
+                    const prevIsDoubleColon = lastStr.endsWith('::');
                     
-                // Add comma-space: space after comma inside parens (unless comma-first)
-                const needsCommaSpace = lastChar === ',' && insideParens > 0 && !justOutputCommaFirstStyle;
-                
-                if (!skipSpace || needsCommaSpace) output.push(' ');
+                    // Unary operators: no space after - or + when in unary position
+                    // This is now determined when processing the operator token itself
+                    const prevIsUnaryOperator = prevTokenWasUnaryOperator && (lastChar === '-' || lastChar === '+');
+                    
+                    // Skip space in certain cases
+                    const skipSpace = lastChar === '(' || lastChar === '.' || lastChar === '\n' ||
+                        text === ')' || text === '.' ||
+                        text === '::' || prevIsDoubleColon || // No space around ::
+                        (text === '(' && (prevWasFunctionName || prevWasBuiltInFunctionKeyword)) || // No space before ( after function
+                        (text === ',' && insideParens > 0) || // No space before comma inside parens
+                        isLateralViewComma || // No space before comma in LATERAL VIEW column list
+                        justOutputCommaFirstStyle || // No space after comma in comma-first style
+                        afterWhereKeyword || afterHavingKeyword || // No space before first condition in multiline WHERE/HAVING
+                        prevIsUnaryOperator || // No space after unary - or +
+                        lastChar === '[' || text === '[' || text === ']'; // No space around [ and ]
+                        
+                    // Add comma-space: space after comma inside parens (unless comma-first)
+                    const needsCommaSpace = lastChar === ',' && insideParens > 0 && !justOutputCommaFirstStyle;
+                    
+                    if (!skipSpace || needsCommaSpace) output.push(' ');
+                }
             }
             
             output.push(outputText);
+            
+            // Handle multi-WHEN CASE: add newline after CASE keyword
+            if (isMultiWhenCase) {
+                output.push('\n');
+                caseDepth++; // Increase depth for WHEN/ELSE/END
+            }
             
             // Track subquery depth changes AFTER outputting the token
             if (isSubqueryOpenParen) {
@@ -1265,6 +1813,11 @@ export function formatSql(sql: string): string {
                 justOutputCommaFirstStyle = false;
             }
             
+            // Decrease CASE depth after END token
+            if (isCaseEnd && caseDepth > 0) {
+                caseDepth--;
+            }
+            
             // Reset flags after processing
             if (symbolicName !== 'SELECT' && symbolicName !== 'DISTINCT' && afterSelectKeyword && !isListComma) {
                 afterSelectKeyword = false;
@@ -1279,6 +1832,16 @@ export function formatSql(sql: string): string {
             prevWasFunctionName = isFunctionCall;
             prevWasBuiltInFunctionKeyword = isBuiltInFunctionKeyword;
             isFirstNonWsToken = false;
+            
+            // Update previous token tracking for unary operator detection
+            prevTokenWasUnaryOperator = currentTokenIsUnaryOperator;
+            prevTokenText = text;
+            prevTokenType = tokenType;
+        }
+        
+        // Output any remaining pending comments (trailing comments)
+        if (pendingComments.length > 0) {
+            outputPendingComments();
         }
         
         return output.join('').trim();
