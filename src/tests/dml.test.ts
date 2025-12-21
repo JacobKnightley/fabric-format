@@ -31,5 +31,9 @@ export const dmlTests: TestSuite = {
             input: "delete from users where created < '2020-01-01' and status = 'inactive'",
             expected: "DELETE FROM users\nWHERE\n    created < '2020-01-01'\n    AND status = 'inactive'",
         },
-    ],
+        {
+            name: 'MERGE clause formatting',
+            input: 'MERGE INTO target t USING source s ON t.id = s.id WHEN MATCHED THEN UPDATE SET val = s.val',
+            expected: 'MERGE INTO target t\nUSING source s\nON t.id = s.id\nWHEN MATCHED THEN UPDATE SET val = s.val',
+        },    ],
 };

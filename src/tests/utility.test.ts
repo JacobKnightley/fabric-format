@@ -36,5 +36,9 @@ export const utilityTests: TestSuite = {
             input: 'analyze table t',
             expected: 'ANALYZE TABLE t',
         },
-    ],
+        {
+            name: 'SET config preserves lowercase',
+            input: 'set spark.sql.shuffle.partitions = 200',
+            expected: 'SET spark.sql.shuffle.partitions = 200',
+        },    ],
 };

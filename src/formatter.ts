@@ -136,6 +136,14 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
     groupingAnalyticsParens: Set<number> = new Set(); // ( after GROUPING SETS/ROLLUP/CUBE
     insideGroupingAnalytics: boolean = false; // Track if we're currently inside one
     
+    // Track SET configuration contexts (preserve config key casing)
+    setConfigTokens: Set<number> = new Set();
+    
+    // Track MERGE statement clause tokens (USING, ON, WHEN)
+    mergeUsingTokens: Set<number> = new Set();
+    mergeOnTokens: Set<number> = new Set();
+    mergeWhenTokens: Set<number> = new Set();
+    
     // Track current SELECT token for associating with list items
     private currentSelectToken: number = -1;
 
@@ -854,6 +862,74 @@ class ParseTreeAnalyzer extends SqlBaseParserVisitor {
         return commaCount;
     }
 
+    // ========== SET CONFIGURATION ==========
+    // SET spark.sql.shuffle.partitions = 200
+    // The config key should preserve lowercase casing
+    
+    visitSetConfiguration(ctx: any): any {
+        // Mark all tokens after SET as identifiers to preserve casing
+        this._markSetConfigTokens(ctx);
+        return this.visitChildren(ctx);
+    }
+    
+    private _markSetConfigTokens(ctx: any): void {
+        if (!ctx || !ctx.children) return;
+        let foundSet = false;
+        for (const child of ctx.children) {
+            if (child.symbol) {
+                const symName = SqlBaseLexer.symbolicNames[child.symbol.type];
+                if (symName === 'SET') {
+                    foundSet = true;
+                } else if (foundSet) {
+                    // Mark all tokens after SET as config tokens (preserve casing)
+                    this.setConfigTokens.add(child.symbol.tokenIndex);
+                }
+            } else if (child.children && foundSet) {
+                // Recursively mark nested tokens
+                this._markSetConfigTokensRecursive(child);
+            }
+        }
+    }
+    
+    private _markSetConfigTokensRecursive(ctx: any): void {
+        if (!ctx) return;
+        if (ctx.symbol) {
+            this.setConfigTokens.add(ctx.symbol.tokenIndex);
+        }
+        if (ctx.children) {
+            for (const child of ctx.children) {
+                this._markSetConfigTokensRecursive(child);
+            }
+        }
+    }
+    
+    // ========== MERGE STATEMENT ==========
+    // MERGE INTO target USING source ON condition WHEN MATCHED ...
+    // USING, ON, and WHEN should start new lines
+    
+    visitMergeIntoTable(ctx: any): any {
+        this._markMergeClauses(ctx);
+        return this.visitChildren(ctx);
+    }
+    
+    private _markMergeClauses(ctx: any): void {
+        if (!ctx || !ctx.children) return;
+        for (const child of ctx.children) {
+            if (child.symbol) {
+                const symName = SqlBaseLexer.symbolicNames[child.symbol.type];
+                if (symName === 'USING') {
+                    this.mergeUsingTokens.add(child.symbol.tokenIndex);
+                } else if (symName === 'ON') {
+                    this.mergeOnTokens.add(child.symbol.tokenIndex);
+                } else if (symName === 'WHEN') {
+                    this.mergeWhenTokens.add(child.symbol.tokenIndex);
+                }
+            } else if (child.children) {
+                this._markMergeClauses(child);
+            }
+        }
+    }
+
     // ========== SUBQUERY TRACKING ==========
     
     visitQuerySpecification(ctx: any): any {
@@ -1200,7 +1276,13 @@ export function formatSql(sql: string): string {
             // Determine output text based on context
             let outputText: string;
             
-            if (isFunctionCall) {
+            // Check if this is a SET config token (preserve casing)
+            const isSetConfigToken = analyzer.setConfigTokens.has(tokenIndex);
+            
+            if (isSetConfigToken) {
+                // SET config key/value → preserve original casing
+                outputText = text;
+            } else if (isFunctionCall) {
                 // Check if it's a built-in function using the authoritative list from Spark source
                 const funcLower = text.toLowerCase();
                 const isBuiltInFromList = SPARK_BUILTIN_FUNCTIONS.has(funcLower);
@@ -1327,6 +1409,22 @@ export function formatSql(sql: string): string {
                 // END in multi-WHEN CASE - same indent as CASE (5 spaces)
                 needsNewline = true;
                 indent = getBaseIndent(subqueryDepth + ddlDepth) + '     '; // 5-space indent (matches CASE)
+            }
+            
+            // MERGE clause handling - USING, ON, WHEN on new lines
+            const isMergeUsing = analyzer.mergeUsingTokens.has(tokenIndex);
+            const isMergeOn = analyzer.mergeOnTokens.has(tokenIndex);
+            const isMergeWhen = analyzer.mergeWhenTokens.has(tokenIndex);
+            
+            if (isMergeUsing && !isFirstNonWsToken) {
+                needsNewline = true;
+                indent = getBaseIndent(subqueryDepth + ddlDepth);
+            } else if (isMergeOn && !isFirstNonWsToken) {
+                needsNewline = true;
+                indent = getBaseIndent(subqueryDepth + ddlDepth);
+            } else if (isMergeWhen && !isFirstNonWsToken) {
+                needsNewline = true;
+                indent = getBaseIndent(subqueryDepth + ddlDepth);
             }
             
             // Clause start gets newline (unless it's the first token)

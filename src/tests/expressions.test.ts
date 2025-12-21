@@ -58,6 +58,11 @@ export const literalTests: TestSuite = {
             input: "select date '2024-01-01' from t",
             expected: "SELECT DATE '2024-01-01'\nFROM t",
         },
+        {
+            name: 'TIMESTAMP literal',
+            input: "select timestamp '2024-01-01 12:00:00' from t",
+            expected: "SELECT TIMESTAMP '2024-01-01 12:00:00'\nFROM t",
+        },
     ],
 };
 

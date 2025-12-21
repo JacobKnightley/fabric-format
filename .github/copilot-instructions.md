@@ -118,7 +118,7 @@ src/tests/
 ```
 
 **Running tests:**
-- `npm test` - Run all tests (106 tests)
+- `npm test` - Run all tests (109 tests)
 - `npm run test:verbose` - Run with failure details
 
 ## Key Files
@@ -163,5 +163,5 @@ Formatted SQL
 - Never add hardcoded keyword/function lists
 - Always use parse tree context for detection
 - Test with context-sensitive examples like `select a.order from t order by x`
-- Run `npm test` to verify all 106 tests pass
+- Run `npm test` to verify all 109 tests pass
 - Add new tests to the appropriate test module

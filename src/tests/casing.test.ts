@@ -12,6 +12,11 @@ export const casingTests: TestSuite = {
             expected: 'SELECT\n     a.key\n    ,a.order\n    ,a.value\nFROM t',
         },
         {
+            name: 'Context-sensitive keyword (ORDER as column and keyword)',
+            input: 'select a.key, a.order, a.value from t order by a.order',
+            expected: 'SELECT\n     a.key\n    ,a.order\n    ,a.value\nFROM t\nORDER BY a.order',
+        },
+        {
             name: 'Preserve mixed case identifiers',
             input: 'select UserId, UserName from Users where IsActive = true',
             expected: 'SELECT\n     UserId\n    ,UserName\nFROM Users\nWHERE IsActive = TRUE',

@@ -61,15 +61,6 @@ function main(): void {
 
     const { totalPassed, totalFailed } = printSummary(results);
 
-    // Context-sensitive keyword demonstration
-    console.log('\n📚 Context-Sensitive Keyword Demo');
-    const sensitiveTest = 'select a.key, a.order, a.value from t order by a.order';
-    const sensitiveResult = formatSql(sensitiveTest);
-    console.log(`  Input:  ${sensitiveTest}`);
-    console.log(`  Output: ${sensitiveResult.replace(/\n/g, '\\n')}`);
-    console.log(`  ✓ 'a.key', 'a.order', 'a.value' preserve lowercase`);
-    console.log(`  ✓ 'ORDER BY' is uppercase`);
-
     // Exit with appropriate code
     if (totalFailed > 0) {
         process.exit(1);
