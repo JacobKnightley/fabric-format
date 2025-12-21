@@ -66,6 +66,27 @@ function isKeywordToken(tokenType: number, tokenText: string): boolean {
 }
 
 /**
+ * Check if a keyword should always be uppercased, even when appearing in identifier contexts.
+ * These are keywords that have standalone semantic meaning and should never be treated as identifiers.
+ * For example: ALL in "GROUP BY ALL" should be uppercase, not treated as a column name.
+ */
+function isStandaloneKeyword(tokenType: number, tokenText: string): boolean {
+    const symbolicName = SqlBaseLexer.symbolicNames[tokenType];
+    if (!symbolicName) return false;
+    
+    // Keywords that should always be uppercase, even in identifier contexts
+    const standaloneKeywords = new Set([
+        'ALL',      // GROUP BY ALL
+        'DISTINCT', // SELECT DISTINCT
+        'NULL',     // NULL values
+        'TRUE',     // Boolean literal
+        'FALSE',    // Boolean literal
+    ]);
+    
+    return standaloneKeywords.has(symbolicName);
+}
+
+/**
  * Visitor that collects context information from parse tree:
  * - Identifier tokens (preserve casing)
  * - Function call tokens (uppercase)
@@ -1141,6 +1162,104 @@ function formatHintContent(content: string): string {
  */
 export function formatSql(sql: string): string {
     try {
+        // === MAGIC COMMAND HANDLING ===
+        // Check if the SQL starts with %%sql or %sql (Databricks/Fabric notebook magic commands)
+        // These should only be recognized at the very start of the input (first line, no preceding text)
+        let magicCommand = '';
+        let sqlToFormat = sql;
+        
+        const magicMatch = sql.match(/^(%%sql|%sql)\s*\n?/);
+        if (magicMatch) {
+            magicCommand = magicMatch[1];
+            sqlToFormat = sql.substring(magicMatch[0].length);
+        }
+        
+        // === SEMICOLON HANDLING ===
+        // Split on semicolons to format multiple statements separately
+        // But we need to be careful not to split on semicolons inside string literals
+        const statements = splitOnSemicolons(sqlToFormat);
+        const formattedStatements: string[] = [];
+        
+        for (const stmt of statements) {
+            if (stmt.trim().length === 0) continue; // Skip empty statements
+            
+            const formatted = formatSingleStatement(stmt.trim());
+            formattedStatements.push(formatted);
+        }
+        
+        let result = formattedStatements.join(';\n\n');
+        
+        // Add back trailing semicolon if original had one
+        if (sqlToFormat.trimEnd().endsWith(';')) {
+            result += ';';
+        }
+        
+        // Add back magic command at the beginning
+        if (magicCommand) {
+            result = magicCommand + '\n' + result;
+        }
+        
+        return result;
+    } catch {
+        return sql;
+    }
+}
+
+/**
+ * Split SQL on semicolons, but not semicolons inside string literals
+ */
+function splitOnSemicolons(sql: string): string[] {
+    const statements: string[] = [];
+    let current = '';
+    let inSingleQuote = false;
+    let inDoubleQuote = false;
+    let escaped = false;
+    
+    for (let i = 0; i < sql.length; i++) {
+        const ch = sql[i];
+        
+        if (escaped) {
+            current += ch;
+            escaped = false;
+            continue;
+        }
+        
+        if (ch === '\\') {
+            current += ch;
+            escaped = true;
+            continue;
+        }
+        
+        if (ch === "'" && !inDoubleQuote) {
+            inSingleQuote = !inSingleQuote;
+            current += ch;
+        } else if (ch === '"' && !inSingleQuote) {
+            inDoubleQuote = !inDoubleQuote;
+            current += ch;
+        } else if (ch === ';' && !inSingleQuote && !inDoubleQuote) {
+            // Found a statement separator
+            if (current.trim().length > 0) {
+                statements.push(current);
+            }
+            current = '';
+        } else {
+            current += ch;
+        }
+    }
+    
+    // Add remaining SQL
+    if (current.trim().length > 0) {
+        statements.push(current);
+    }
+    
+    return statements;
+}
+
+/**
+ * Format a single SQL statement
+ */
+function formatSingleStatement(sql: string): string {
+    try {
         // Uppercase for lexing (grammar matches uppercase keywords)
         const upperSql = sql.toUpperCase();
         const chars = new antlr4.InputStream(upperSql);
@@ -1464,6 +1583,10 @@ export function formatSql(sql: string): string {
             if (isSetConfigToken) {
                 // SET config key/value → preserve original casing
                 outputText = text;
+            } else if (isStandaloneKeyword(tokenType, text)) {
+                // Standalone keywords (ALL, DISTINCT, NULL, etc.) → always uppercase
+                // Even if they appear in identifier contexts
+                outputText = text.toUpperCase();
             } else if (isFunctionCall) {
                 // Check if it's a built-in function using the authoritative list from Spark source
                 const funcLower = text.toLowerCase();
@@ -1479,6 +1602,7 @@ export function formatSql(sql: string): string {
                 }
             } else if (isInIdentifierContext) {
                 // Identifier → preserve original casing
+                // Even if it's a keyword, when used as identifier (e.g., a.order), preserve casing
                 outputText = text;
             } else if (isKeywordToken(tokenType, text)) {
                 // Keyword (symbolicName === text) → uppercase

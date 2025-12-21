@@ -19,6 +19,8 @@ import { ddlTests } from './ddl.test.js';
 import { dmlTests } from './dml.test.js';
 import { sparkFeaturesTests, lambdaTests, pivotFormattingTests, unpivotFormattingTests, lateralViewFormattingTests } from './spark-features.test.js';
 import { utilityTests } from './utility.test.js';
+import { magicCommandsTests } from './magic-commands.test.js';
+import { semicolonTests } from './semicolon.test.js';
 
 // All test suites in order
 const allSuites = [
@@ -47,6 +49,8 @@ const allSuites = [
     unpivotFormattingTests,
     lateralViewFormattingTests,
     utilityTests,
+    magicCommandsTests,
+    semicolonTests,
 ];
 
 function main(): void {

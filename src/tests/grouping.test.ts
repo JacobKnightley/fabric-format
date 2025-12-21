@@ -61,5 +61,15 @@ export const groupByTests: TestSuite = {
             input: 'select a, b, sum(x) from t group by cube(a, b)',
             expected: 'SELECT\n     a\n    ,b\n    ,SUM(x)\nFROM t\nGROUP BY CUBE(a, b)',
         },
+        {
+            name: 'GROUP BY ALL',
+            input: 'select col1, count(*) from table1 group by all',
+            expected: 'SELECT\n     col1\n    ,COUNT(*)\nFROM table1\nGROUP BY ALL',
+        },
+        {
+            name: 'GROUP BY ALL with WHERE',
+            input: 'select col1, sum(col2) from t1 where col3 > 10 group by all',
+            expected: 'SELECT\n     col1\n    ,SUM(col2)\nFROM t1\nWHERE col3 > 10\nGROUP BY ALL',
+        },
     ],
 };
