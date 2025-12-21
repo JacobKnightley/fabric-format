@@ -1137,39 +1137,101 @@ export function formatSql(sql: string): string {
         // Track CASE expression depth for indentation
         let caseDepth = 0;
         
+        // Collect pending comments to be output at the right time
+        interface PendingComment {
+            text: string;
+            type: number;
+        }
+        let pendingComments: PendingComment[] = [];
+        
+        // Helper to output pending comments (returns true if any were output, and whether last was multiline block comment)
+        const outputPendingComments = (addSpaceBefore: boolean = true): { outputAny: boolean, lastWasMultilineBlock: boolean } => {
+            if (pendingComments.length === 0) return { outputAny: false, lastWasMultilineBlock: false };
+            let lastWasMultilineBlock = false;
+            for (const comment of pendingComments) {
+                if (addSpaceBefore && output.length > 0) {
+                    const lastStr = output[output.length - 1];
+                    const lastChar = lastStr.charAt(lastStr.length - 1);
+                    // Don't add space after newline, space, or open paren
+                    if (lastChar !== '\n' && lastChar !== ' ' && lastChar !== '(') {
+                        output.push(' ');
+                    }
+                }
+                output.push(comment.text);
+                // Track if this is a multi-line block comment
+                lastWasMultilineBlock = comment.type === SqlBaseLexer.BRACKETED_COMMENT && comment.text.includes('\n');
+                // If it's a multi-line block comment, add a newline after it
+                if (lastWasMultilineBlock) {
+                    output.push('\n');
+                }
+                addSpaceBefore = true; // After first comment, always add space
+            }
+            pendingComments = [];
+            return { outputAny: true, lastWasMultilineBlock };
+        };
+        
+        // Helper to collect comments from a range of hidden tokens
+        const collectCommentsFromRange = (startIdx: number, endIdx: number): void => {
+            for (let j = startIdx; j < endIdx; j++) {
+                const hiddenToken = allOrigTokens[j];
+                if (hiddenToken && hiddenToken.channel === 1) {
+                    if (hiddenToken.type === SqlBaseLexer.SIMPLE_COMMENT || 
+                        hiddenToken.type === SqlBaseLexer.BRACKETED_COMMENT) {
+                        pendingComments.push({
+                            text: hiddenToken.text,
+                            type: hiddenToken.type
+                        });
+                    }
+                }
+            }
+        };
+        
+        // Helper to find next non-WS, non-comment token index
+        const findNextNonWsTokenIndex = (startIdx: number): number => {
+            for (let j = startIdx; j < tokenList.length; j++) {
+                const tok = tokenList[j];
+                // Skip WS, EOF, and comment tokens (which are on hidden channel)
+                if (tok.type !== SqlBaseLexer.WS && 
+                    tok.type !== antlr4.Token.EOF &&
+                    tok.type !== SqlBaseLexer.SIMPLE_COMMENT &&
+                    tok.type !== SqlBaseLexer.BRACKETED_COMMENT) {
+                    return j;
+                }
+            }
+            return -1;
+        };
+        
         for (let i = 0; i < tokenList.length && i < allOrigTokens.length; i++) {
             const token = tokenList[i];
             const origToken = allOrigTokens[i];
             
             if (token.type === antlr4.Token.EOF) continue;
             
-            // Process any hidden tokens (comments) that appear before this token
-            // by checking tokens between lastProcessedIndex and current i
-            for (let j = lastProcessedIndex + 1; j < i; j++) {
-                const hiddenToken = allOrigTokens[j];
-                if (hiddenToken.channel === 1) { // HIDDEN channel
-                    if (hiddenToken.type === SqlBaseLexer.SIMPLE_COMMENT || 
-                        hiddenToken.type === SqlBaseLexer.BRACKETED_COMMENT) {
-                        // Add space before comment if not at start and not already on new line
-                        if (output.length > 0) {
-                            const lastStr = output[output.length - 1];
-                            if (lastStr.charAt(lastStr.length - 1) !== '\n') {
-                                output.push(' ');
-                            }
-                        }
-                        output.push(hiddenToken.text);
-                        // SIMPLE_COMMENT already includes its trailing newline
-                        // BRACKETED_COMMENT needs a newline after it
-                        if (hiddenToken.type === SqlBaseLexer.BRACKETED_COMMENT && 
-                            !hiddenToken.text.endsWith('\n')) {
-                            output.push('\n');
-                        }
-                    }
-                }
+            // Collect any hidden tokens (comments) that appear before this token
+            // They will be output at the appropriate time based on formatting decisions
+            // Only collect if we haven't already processed ahead (e.g., from look-ahead in comma handling)
+            const wasAlreadyProcessed = lastProcessedIndex >= i;
+            if (!wasAlreadyProcessed) {
+                collectCommentsFromRange(lastProcessedIndex + 1, i);
             }
-            lastProcessedIndex = i;
+            lastProcessedIndex = Math.max(lastProcessedIndex, i);
             
+            // Skip WS tokens
             if (token.type === SqlBaseLexer.WS) continue;
+            
+            // Handle comment tokens directly (in case the loop reaches them)
+            // Only add if not already collected by look-ahead
+            if (token.type === SqlBaseLexer.SIMPLE_COMMENT ||
+                token.type === SqlBaseLexer.BRACKETED_COMMENT) {
+                if (!wasAlreadyProcessed) {
+                    // This comment wasn't collected by look-ahead, add it now
+                    pendingComments.push({
+                        text: origToken.text,
+                        type: token.type
+                    });
+                }
+                continue;
+            }
             
             const text = origToken.text;
             const tokenType = token.type;
@@ -1453,6 +1515,15 @@ export function formatSql(sql: string): string {
                 indent = getBaseIndent(subqueryDepth + ddlDepth) + '    '; // 4-space indent for comma
                 isFirstListItem = false;
                 justOutputCommaFirstStyle = true; // Flag to skip space after comma
+                
+                // Look ahead: collect any comments between this comma and the next token
+                // These comments semantically belong to the previous token, so output them
+                // before the comma's newline
+                const nextIdx = findNextNonWsTokenIndex(i + 1);
+                if (nextIdx > 0) {
+                    collectCommentsFromRange(i + 1, nextIdx);
+                    lastProcessedIndex = nextIdx - 1; // Skip these tokens in next iteration
+                }
             }
             
             // CTE comma handling (comma-first for multiple CTEs)
@@ -1460,6 +1531,13 @@ export function formatSql(sql: string): string {
                 needsNewline = true;
                 indent = ''; // No indent, comma at start of line (CTEs at top level)
                 justOutputCommaFirstStyle = true;
+                
+                // Look ahead for comments
+                const nextIdx = findNextNonWsTokenIndex(i + 1);
+                if (nextIdx > 0) {
+                    collectCommentsFromRange(i + 1, nextIdx);
+                    lastProcessedIndex = nextIdx - 1;
+                }
             }
             
             // DDL column list comma handling
@@ -1468,6 +1546,13 @@ export function formatSql(sql: string): string {
                 // DDL commas are at the same level as the column definitions, not indented further
                 indent = getBaseIndent(subqueryDepth) + '    '; // 4-space indent for comma (ddlDepth already accounts for being inside parens)
                 justOutputCommaFirstStyle = true;
+                
+                // Look ahead for comments
+                const nextIdx = findNextNonWsTokenIndex(i + 1);
+                if (nextIdx > 0) {
+                    collectCommentsFromRange(i + 1, nextIdx);
+                    lastProcessedIndex = nextIdx - 1;
+                }
             }
             
             // VALUES comma handling (between value rows)
@@ -1475,6 +1560,13 @@ export function formatSql(sql: string): string {
                 needsNewline = true;
                 indent = getBaseIndent(subqueryDepth + ddlDepth); // No extra indent, comma at start
                 justOutputCommaFirstStyle = true;
+                
+                // Look ahead for comments
+                const nextIdx = findNextNonWsTokenIndex(i + 1);
+                if (nextIdx > 0) {
+                    collectCommentsFromRange(i + 1, nextIdx);
+                    lastProcessedIndex = nextIdx - 1;
+                }
             }
             
             // SET clause comma handling
@@ -1482,6 +1574,13 @@ export function formatSql(sql: string): string {
                 needsNewline = true;
                 indent = getBaseIndent(subqueryDepth + ddlDepth) + '    '; // 4-space indent for comma
                 justOutputCommaFirstStyle = true;
+                
+                // Look ahead for comments
+                const nextIdx = findNextNonWsTokenIndex(i + 1);
+                if (nextIdx > 0) {
+                    collectCommentsFromRange(i + 1, nextIdx);
+                    lastProcessedIndex = nextIdx - 1;
+                }
             }
             
             // Condition operator handling (AND/OR in WHERE/HAVING) - but not BETWEEN's AND
@@ -1539,6 +1638,12 @@ export function formatSql(sql: string): string {
             
             // Apply spacing/newlines
             if (needsNewline) {
+                // ALWAYS output pending comments BEFORE the newline
+                // This keeps comments attached to the preceding content
+                if (pendingComments.length > 0) {
+                    outputPendingComments();
+                }
+                
                 // Add newline if not already at start of line
                 if (output.length > 0) {
                     const lastStr = output[output.length - 1];
@@ -1549,33 +1654,44 @@ export function formatSql(sql: string): string {
                 if (indent) {
                     output.push(indent);
                 }
-            } else if (output.length > 0) {
-                const lastStr = output[output.length - 1];
-                const lastChar = lastStr.charAt(lastStr.length - 1);
+            } else {
+                // No newline needed
+                // First, output any pending comments
+                const hadComments = pendingComments.length > 0;
+                if (hadComments) {
+                    // If this is the first token, don't add space before leading comments
+                    outputPendingComments(output.length > 0);
+                }
                 
-                // Double-colon cast: no space around ::
-                const isDoubleColon = text === '::' || lastChar === ':' && lastStr.endsWith('::');
-                const prevIsDoubleColon = lastStr.endsWith('::');
+                // Now handle spacing before the current token
+                if (output.length > 0) {
+                    const lastStr = output[output.length - 1];
+                    const lastChar = lastStr.charAt(lastStr.length - 1);
                 
-                // Unary operators: no space after - or + when in unary position
-                // This is now determined when processing the operator token itself
-                const prevIsUnaryOperator = prevTokenWasUnaryOperator && (lastChar === '-' || lastChar === '+');
-                
-                // Skip space in certain cases
-                const skipSpace = lastChar === '(' || lastChar === '.' || lastChar === '\n' ||
-                    text === ')' || text === '.' ||
-                    text === '::' || prevIsDoubleColon || // No space around ::
-                    (text === '(' && (prevWasFunctionName || prevWasBuiltInFunctionKeyword)) || // No space before ( after function
-                    (text === ',' && insideParens > 0) || // No space before comma inside parens
-                    justOutputCommaFirstStyle || // No space after comma in comma-first style
-                    afterWhereKeyword || afterHavingKeyword || // No space before first condition in multiline WHERE/HAVING
-                    prevIsUnaryOperator || // No space after unary - or +
-                    lastChar === '[' || text === '[' || text === ']'; // No space around [ and ]
+                    // Double-colon cast: no space around ::
+                    const isDoubleColon = text === '::' || lastChar === ':' && lastStr.endsWith('::');
+                    const prevIsDoubleColon = lastStr.endsWith('::');
                     
-                // Add comma-space: space after comma inside parens (unless comma-first)
-                const needsCommaSpace = lastChar === ',' && insideParens > 0 && !justOutputCommaFirstStyle;
-                
-                if (!skipSpace || needsCommaSpace) output.push(' ');
+                    // Unary operators: no space after - or + when in unary position
+                    // This is now determined when processing the operator token itself
+                    const prevIsUnaryOperator = prevTokenWasUnaryOperator && (lastChar === '-' || lastChar === '+');
+                    
+                    // Skip space in certain cases
+                    const skipSpace = lastChar === '(' || lastChar === '.' || lastChar === '\n' ||
+                        text === ')' || text === '.' ||
+                        text === '::' || prevIsDoubleColon || // No space around ::
+                        (text === '(' && (prevWasFunctionName || prevWasBuiltInFunctionKeyword)) || // No space before ( after function
+                        (text === ',' && insideParens > 0) || // No space before comma inside parens
+                        justOutputCommaFirstStyle || // No space after comma in comma-first style
+                        afterWhereKeyword || afterHavingKeyword || // No space before first condition in multiline WHERE/HAVING
+                        prevIsUnaryOperator || // No space after unary - or +
+                        lastChar === '[' || text === '[' || text === ']'; // No space around [ and ]
+                        
+                    // Add comma-space: space after comma inside parens (unless comma-first)
+                    const needsCommaSpace = lastChar === ',' && insideParens > 0 && !justOutputCommaFirstStyle;
+                    
+                    if (!skipSpace || needsCommaSpace) output.push(' ');
+                }
             }
             
             output.push(outputText);
@@ -1631,6 +1747,11 @@ export function formatSql(sql: string): string {
             prevTokenWasUnaryOperator = currentTokenIsUnaryOperator;
             prevTokenText = text;
             prevTokenType = tokenType;
+        }
+        
+        // Output any remaining pending comments (trailing comments)
+        if (pendingComments.length > 0) {
+            outputPendingComments();
         }
         
         return output.join('').trim();

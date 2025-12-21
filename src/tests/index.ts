@@ -47,7 +47,7 @@ const allSuites = [
 
 function main(): void {
     console.log('='.repeat(50));
-    console.log('🧪 Spark SQL Formatter Test Suite');
+    console.log('Spark SQL Formatter Test Suite');
     console.log('='.repeat(50));
 
     const results: SuiteResult[] = [];

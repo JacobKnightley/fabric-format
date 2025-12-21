@@ -56,13 +56,13 @@ export function runSuite(suite: TestSuite, formatFn: (sql: string) => string): S
 }
 
 export function printSuiteResult(result: SuiteResult, verbose: boolean = false): void {
-    console.log(`\n📦 ${result.suiteName}`);
+    console.log(`\n[Suite] ${result.suiteName}`);
     
     for (const r of result.results) {
         if (r.passed) {
-            console.log(`  ✓ ${r.name}`);
+            console.log(`  [PASS] ${r.name}`);
         } else {
-            console.log(`  ✗ ${r.name}`);
+            console.log(`  [FAIL] ${r.name}`);
             if (verbose) {
                 console.log(`    Input:    ${r.input}`);
                 console.log(`    Expected: ${r.expected?.replace(/\n/g, '\\n')}`);
@@ -84,7 +84,7 @@ export function printSummary(results: SuiteResult[]): { totalPassed: number; tot
     }
 
     console.log('\n' + '='.repeat(50));
-    console.log(`📊 TOTAL: ${totalPassed}/${totalPassed + totalFailed} tests passed`);
+    console.log(`TOTAL: ${totalPassed}/${totalPassed + totalFailed} tests passed`);
     console.log('='.repeat(50));
 
     return { totalPassed, totalFailed };
