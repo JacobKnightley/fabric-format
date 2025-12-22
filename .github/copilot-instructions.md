@@ -118,8 +118,22 @@ src/tests/
 ```
 
 **Running tests:**
-- `npm test` - Run all tests (109 tests)
+- `npm test` - Run all tests (207 tests)
 - `npm run test:verbose` - Run with failure details
+
+## Module Structure
+
+The formatter is organized into focused modules (~200-400 lines each) for maintainability and AI-assisted development:
+
+| Module | Purpose |
+|--------|---------|
+| `src/types.ts` | Central interfaces (`AnalyzerResult`, `FormattingState`, `TokenContext`, etc.) |
+| `src/token-utils.ts` | Grammar-derived token detection (`isKeywordToken`, `isCommentToken`, etc.) |
+| `src/parse-tree-analyzer.ts` | AST visitor that collects all formatting context from parse tree |
+| `src/formatting-context.ts` | State management, indent calculation, expansion decision helpers |
+| `src/output-builder.ts` | Output string construction with column tracking |
+| `src/formatter.ts` | Main orchestration, public API (`formatSql`, `needsFormatting`) |
+| `src/constants.ts` | Configuration constants (`MAX_LINE_WIDTH`) |
 
 ## Key Files
 
@@ -127,7 +141,10 @@ src/tests/
 |------|---------|
 | `grammar/SqlBaseLexer.g4` | Source of truth for keywords, operators |
 | `grammar/SqlBaseParser.g4` | Source of truth for grammar rules |
-| `src/formatter.ts` | Main formatting logic (grammar-driven) |
+| `src/formatter.ts` | Main formatting orchestration (grammar-driven) |
+| `src/parse-tree-analyzer.ts` | Parse tree visitor for context detection |
+| `src/token-utils.ts` | Grammar-derived token utilities |
+| `src/types.ts` | TypeScript interfaces for the formatter |
 | `src/tests/` | Modular test suites |
 | `scripts/build_antlr_js.py` | Generates JS parser from grammar |
 | `STYLE_GUIDE.md` | Formatting style reference |
@@ -144,16 +161,15 @@ ANTLR Parser (SqlBaseParser)
     ↓
 Parse Tree
     ↓
-ParseTreeAnalyzer Visitor
+ParseTreeAnalyzer (parse-tree-analyzer.ts)
     - Marks identifier positions
     - Marks function call positions
     - Marks clause boundary positions
     ↓
-Token Formatting
-    - isKeywordToken() via symbolicNames
-    - Uppercase keywords (unless identifier position)
-    - Preserve identifiers
-    - Add newlines before clauses
+Token Formatting (formatter.ts)
+    - Uses token-utils.ts for grammar-driven detection
+    - Uses formatting-context.ts for state management
+    - Uses output-builder.ts for output construction
     ↓
 Formatted SQL
 ```
@@ -163,5 +179,5 @@ Formatted SQL
 - Never add hardcoded keyword/function lists
 - Always use parse tree context for detection
 - Test with context-sensitive examples like `select a.order from t order by x`
-- Run `npm test` to verify all 109 tests pass
+- Run `npm test` to verify all 207 tests pass
 - Add new tests to the appropriate test module

@@ -80,24 +80,38 @@ npm test
 ```
 Input SQL
     ↓
-ANTLR Lexer (SqlBaseLexer.js)
+Dual Lexing (uppercase for types, original for text)
     ↓
-ANTLR Parser (SqlBaseParser.js) 
+ANTLR Parser (SqlBaseParser)
     ↓
 Parse Tree
     ↓
-IdentifierContextVisitor
-    - Walks tree to mark identifier positions
-    - Marks function call positions
+ParseTreeAnalyzer (parse-tree-analyzer.ts)
+    - Marks identifier positions
+    - Marks function call positions  
+    - Marks clause boundary positions
     ↓
-Token Formatting
-    - Uppercase keywords (unless identifier position)
-    - Uppercase built-in functions
-    - Preserve identifiers
-    - Add newlines before clauses
+Token Formatting (formatter.ts)
+    - Uses token-utils.ts for grammar-driven detection
+    - Uses formatting-context.ts for state management
+    - Uses output-builder.ts for output construction
     ↓
 Formatted SQL
 ```
+
+## Module Structure
+
+The formatter is organized into focused modules optimized for maintainability:
+
+| Module | Lines | Purpose |
+|--------|------:|---------|
+| `types.ts` | ~180 | Central interfaces (`AnalyzerResult`, `FormattingState`, etc.) |
+| `token-utils.ts` | ~120 | Grammar-derived token detection utilities |
+| `parse-tree-analyzer.ts` | ~850 | AST visitor that collects formatting context |
+| `formatting-context.ts` | ~230 | State management, indent calculator, expansion helpers |
+| `output-builder.ts` | ~130 | Output construction with column tracking |
+| `formatter.ts` | ~650 | Main orchestration & public API |
+| `constants.ts` | ~10 | Configuration constants (MAX_LINE_WIDTH) |
 
 ## Files
 
