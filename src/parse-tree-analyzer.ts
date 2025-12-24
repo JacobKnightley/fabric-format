@@ -549,7 +549,13 @@ export class ParseTreeAnalyzer extends SqlBaseParserVisitor {
             
             if (expr && expr.stop && alias && alias.start) {
                 const aliasIndex = alias.start.tokenIndex;
-                this.aliasInsertPositions.add(aliasIndex);
+                const aliasText = alias.start.text;
+                
+                // Don't insert AS if the "alias" is actually a keyword that can follow expressions
+                // without AS: OVER (for window functions), AT (for AT TIME ZONE)
+                if (aliasText && aliasText.toUpperCase() !== 'OVER' && aliasText.toUpperCase() !== 'AT') {
+                    this.aliasInsertPositions.add(aliasIndex);
+                }
             }
         }
         

@@ -853,8 +853,24 @@ function determineOutputText(
         return isBuiltIn ? text.toUpperCase() : text;
     }
     
-    // Identifier context - preserve
+    // Check for keywords that should always be uppercase even if parsed as identifiers
+    // These are Delta Lake commands and context-sensitive keywords not in the grammar
+    const textUpper = text.toUpperCase();
+    const alwaysUppercaseKeywords = new Set([
+        'VACUUM', 'RESTORE', 'CLONE', 'SHALLOW', 'DEEP', 'OPTIMIZE', 'ZORDER',
+        'OVER', 'AT', 'TABLESAMPLE', 'BUCKET', 'NOSCAN', 'ALL', 'ANY', 'SOME',
+        'DAYOFWEEK', 'SYSTEM', 'IF', 'RETAIN', 'AS'
+    ]);
+    
+    if (alwaysUppercaseKeywords.has(textUpper) && !ctx.isInIdentifierContext) {
+        return textUpper;
+    }
+    
+    // Identifier context - preserve EXCEPT for certain keywords
     if (ctx.isInIdentifierContext) {
+        if (alwaysUppercaseKeywords.has(textUpper)) {
+            return textUpper;
+        }
         return text;
     }
     
@@ -863,7 +879,11 @@ function determineOutputText(
         return text.toUpperCase();
     }
     
-    // Default - preserve
+    // Default - check if it should be uppercased anyway
+    if (alwaysUppercaseKeywords.has(textUpper)) {
+        return textUpper;
+    }
+    
     return text;
 }
 
