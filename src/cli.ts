@@ -5,9 +5,64 @@
 import { formatSql } from './formatter.js';
 import { formatFabricNotebook } from './magic-sql-extractor.js';
 import * as fs from 'fs';
+import * as path from 'path';
 import * as readline from 'readline';
 
 const args = process.argv.slice(2);
+
+/** Supported file extensions for formatting */
+const SUPPORTED_EXTENSIONS = ['.sql', '.py', '.scala', '.r'];
+
+/**
+ * Recursively find all files with supported extensions in a directory.
+ */
+function findSupportedFiles(dir: string): string[] {
+    const files: string[] = [];
+    
+    function walk(currentDir: string) {
+        const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+        for (const entry of entries) {
+            const fullPath = path.join(currentDir, entry.name);
+            if (entry.isDirectory()) {
+                // Skip common non-source directories
+                if (!['node_modules', '.git', '__pycache__', '.venv', 'venv', 'dist', 'build'].includes(entry.name)) {
+                    walk(fullPath);
+                }
+            } else if (entry.isFile()) {
+                const ext = path.extname(entry.name).toLowerCase();
+                if (SUPPORTED_EXTENSIONS.includes(ext)) {
+                    files.push(fullPath);
+                }
+            }
+        }
+    }
+    
+    walk(dir);
+    return files;
+}
+
+/**
+ * Expand a list of paths to include files from directories.
+ * If a path is a directory, recursively find all supported files.
+ * If a path is a file, include it as-is.
+ */
+function expandPaths(paths: string[]): string[] {
+    const files: string[] = [];
+    for (const p of paths) {
+        if (fs.existsSync(p)) {
+            const stat = fs.statSync(p);
+            if (stat.isDirectory()) {
+                files.push(...findSupportedFiles(p));
+            } else {
+                files.push(p);
+            }
+        } else {
+            // Could be a glob pattern handled by shell, just include it
+            files.push(p);
+        }
+    }
+    return files;
+}
 
 /**
  * Format content based on file extension.
@@ -86,20 +141,25 @@ if (remainingArgs.length === 0) {
     console.log(`Spark SQL Formatter
 
 Usage:
-  sparkfmt [options] [file...]
+  sparkfmt [options] [file|directory...]
   echo "select * from t" | sparkfmt
+
+Arguments:
+  file                A SQL, Python, Scala, or R file to format
+  directory           A directory to recursively format (finds .sql, .py, .scala, .r)
 
 Options:
   -h, --help          Show this help message
-  -c, --check         Check if file needs formatting (exit 1 if so)
+  -c, --check         Check if files need formatting (exit 1 if so)
   -i, --inline        Format SQL provided as argument
   --stdout            Print to stdout instead of formatting in-place
 
 Examples:
   sparkfmt query.sql                    Format file in-place
+  sparkfmt ./src                        Format all supported files in directory
   sparkfmt *.sql                        Format multiple files in-place
   sparkfmt -i "select * from t"         Format inline SQL
-  sparkfmt -c query.sql                 Check if formatting needed
+  sparkfmt -c ./src                     Check if any files need formatting
   sparkfmt --stdout query.sql           Print formatted SQL to stdout
 `);
 } else if (remainingArgs[0] === '--stdout') {
@@ -115,21 +175,41 @@ Examples:
     const sql = remainingArgs.slice(1).join(' ');
     output(formatSql(sql));
 } else if (remainingArgs[0] === '-c' || remainingArgs[0] === '--check') {
-    const file = remainingArgs[1];
-    if (!file) {
-        console.error('Error: No file specified for --check');
+    const paths = remainingArgs.slice(1);
+    if (paths.length === 0) {
+        console.error('Error: No file or directory specified for --check');
         process.exit(2);
     }
-    const content = fs.readFileSync(file, 'utf-8');
-    const formatted = formatContent(content, file);
-    if (formatted !== content) {
-        console.log(`File ${file} needs formatting`);
+    const files = expandPaths(paths);
+    if (files.length === 0) {
+        console.log('No supported files found');
+        process.exit(0);
+    }
+    let needsFormatting = false;
+    for (const file of files) {
+        try {
+            const content = fs.readFileSync(file, 'utf-8');
+            const formatted = formatContent(content, file);
+            if (formatted !== content) {
+                console.log(`File ${file} needs formatting`);
+                needsFormatting = true;
+            }
+        } catch (e: any) {
+            console.error(`Error checking ${file}: ${e.message}`);
+        }
+    }
+    if (needsFormatting) {
         process.exit(1);
     }
-    console.log(`File ${file} is properly formatted`);
+    console.log(`All ${files.length} file(s) are properly formatted`);
 } else {
-    // File argument(s) - format in-place
-    const files = remainingArgs;
+    // File/directory argument(s) - format in-place
+    const files = expandPaths(remainingArgs);
+    if (files.length === 0) {
+        console.log('No supported files found');
+        process.exit(0);
+    }
+    let formattedCount = 0;
     for (const file of files) {
         try {
             const content = fs.readFileSync(file, 'utf-8');
@@ -141,10 +221,16 @@ Examples:
             if (formattedWithOriginalEndings !== content) {
                 fs.writeFileSync(file, formattedWithOriginalEndings, 'utf-8');
                 console.log(`Formatted ${file}`);
+                formattedCount++;
             }
         } catch (e: any) {
             console.error(`Error formatting ${file}: ${e.message}`);
             process.exit(1);
         }
+    }
+    if (formattedCount === 0) {
+        console.log(`All ${files.length} file(s) already formatted`);
+    } else {
+        console.log(`Formatted ${formattedCount} of ${files.length} file(s)`);
     }
 }

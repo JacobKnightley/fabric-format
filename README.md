@@ -29,20 +29,20 @@ npm install -g @jacobknightley/sparkfmt
 ## Usage
 
 ```bash
-# Format a SQL file in-place
-sparkfmt query.sql
+# Format a file in-place
+sparkfmt query.sql                 # Generic SQL file
+sparkfmt notebook-content.py       # Python notebook
+sparkfmt notebook-content.scala    # Scala notebook
+sparkfmt notebook-content.r        # R notebook
+sparkfmt notebook-content.sql      # SQL notebook
 
-# Format multiple files
-sparkfmt *.sql
-
-# Format a Fabric notebook (SQL cells formatted, code unchanged)
-sparkfmt notebook.py       # Python notebook
-sparkfmt notebook.scala    # Scala notebook
-sparkfmt notebook.r        # R notebook
-sparkfmt notebook.sql      # SQL notebook (formats raw SQL and MAGIC SQL cells)
+# Format an entire directory (recursively finds .sql, .py, .scala, .r files)
+sparkfmt ./src
+sparkfmt C:\dev\my-project
 
 # Check if formatting needed (exit code 1 if changes needed)
 sparkfmt -c query.sql
+sparkfmt -c ./src
 ```
 
 ```bash
