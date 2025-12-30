@@ -62,9 +62,12 @@ export function getSymbolicName(tokenType: number): string | null {
  * Keywords in ANTLR are defined like: SELECT: 'SELECT';
  * So symbolicNames[tokenType] === tokenText for keywords.
  * 
- * Special case: Some keywords have aliases (e.g., TEMPORARY: 'TEMPORARY' | 'TEMP')
- * In these cases, symbolicName won't match text, but it's still a keyword.
- * We detect this by checking if the token has a non-identifier symbolic name.
+ * IMPORTANT: Due to dual-lexing (uppercase for token types, original for text),
+ * we must be careful not to uppercase non-keywords. The tokenType comes from
+ * the uppercase stream, which may misclassify single letters (e.g., X -> BINARY_HEX).
+ * 
+ * We ONLY return true if the symbolic name MATCHES the text (case-insensitive).
+ * This ensures we don't uppercase identifiers like 'x' just because X is BINARY_HEX.
  * 
  * @param tokenType - The token type number
  * @param tokenText - The original token text
@@ -74,19 +77,38 @@ export function isKeywordToken(tokenType: number, tokenText: string): boolean {
     const symbolicName = SqlBaseLexer.symbolicNames[tokenType];
     if (!symbolicName) return false;
     
+    const textUpper = tokenText.toUpperCase();
+    
     // Direct match: symbolic name equals uppercase text (e.g., SELECT)
-    if (symbolicName === tokenText.toUpperCase()) return true;
+    // This is the ONLY reliable way to detect keywords with dual-lexing
+    if (symbolicName === textUpper) return true;
     
-    // Alias match: token has a keyword symbolic name but different text (e.g., TEMP -> TEMPORARY)
-    // If it's not an identifier/literal and has a symbolic name, it's a keyword
-    const nonKeywordTypes = new Set([
-        'IDENTIFIER', 'STRING', 'STRING_LITERAL', 'BIGINT_LITERAL', 'SMALLINT_LITERAL',
-        'TINYINT_LITERAL', 'INTEGER_VALUE', 'EXPONENT_VALUE', 'DECIMAL_VALUE', 'FLOAT_LITERAL',
-        'DOUBLE_LITERAL', 'BIGDECIMAL_LITERAL', 'BACKQUOTED_IDENTIFIER', 'SIMPLE_COMMENT',
-        'BRACKETED_COMMENT', 'WS', 'UNRECOGNIZED'
-    ]);
+    // Handle token name mismatches where the symbolic name differs from the keyword text
+    // These are defined in the grammar like: PERCENTLIT: 'PERCENT';
+    // Maps: keyword text -> symbolic name
+    const tokenNameMismatches: Record<string, string> = {
+        'PERCENT': 'PERCENTLIT',    // PERCENTLIT: 'PERCENT';
+        'MINUS': 'SETMINUS',        // SETMINUS: 'MINUS';
+        'IDENTIFIER': 'IDENTIFIER_KW',  // IDENTIFIER_KW: 'IDENTIFIER';
+    };
+    if (tokenNameMismatches[textUpper] === symbolicName) {
+        return true;
+    }
     
-    return !nonKeywordTypes.has(symbolicName);
+    // Handle keyword aliases: TEMP -> TEMPORARY, DEC -> DECIMAL, etc.
+    // For aliases, we check against a known list of alias mappings
+    const aliasKeywords: Record<string, string> = {
+        'TEMP': 'TEMPORARY',
+        'DEC': 'DECIMAL',
+        'INT': 'INTEGER',
+        'CHAR': 'CHARACTER',
+        'BOOL': 'BOOLEAN',
+    };
+    if (aliasKeywords[textUpper] && symbolicName === aliasKeywords[textUpper]) {
+        return true;
+    }
+    
+    return false;
 }
 
 /**
@@ -118,13 +140,22 @@ export function isWhitespaceToken(tokenType: number): boolean {
  * Keywords that are used like functions: KEYWORD(args)
  * These need special handling for spacing (no space before opening paren).
  * 
- * Note: This is a style choice, not grammar-derived.
- * IN is in built-in functions but IN (list) is a predicate with space before (.
+ * Note: This is a style choice for layout, not grammar-derived.
+ * These keywords take arguments in parentheses like functions do.
  */
 const FUNCTION_LIKE_KEYWORDS = new Set([
     'cast', 'try_cast', 'extract', 'position', 'substring', 'trim',
     'overlay', 'percentile_cont', 'percentile_disc', 'any_value',
-    'first_value', 'last_value', 'nth_value', 'lead', 'lag'
+    'first_value', 'last_value', 'nth_value', 'lead', 'lag',
+    'decimal', 'array', 'map', 'struct',
+    // Type constructors
+    'varchar', 'char',
+    // Constraints
+    'unique', 'primary', 'foreign', 'check',
+    // Hive streaming (SELECT TRANSFORM(...) USING ...)
+    'transform',
+    // DDL (CREATE FUNCTION name(...))
+    'function'
 ]);
 
 /**

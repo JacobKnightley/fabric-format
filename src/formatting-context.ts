@@ -33,6 +33,7 @@ export function createInitialState(): FormattingState {
         caseDepth: 0,
         insideParens: 0,
         insideFunctionArgs: 0,
+        complexTypeDepth: 0,  // Tracks nesting in ARRAY<>, MAP<>, STRUCT<>
         
         // Position tracking
         currentColumn: 0,
@@ -311,13 +312,17 @@ export class IndentCalculator {
 }
 
 /**
- * Determines if a +/- operator is unary based on previous token.
+ * Determines if a +/-/~ operator is unary based on previous token.
+ * Tilde (~) is always unary (bitwise NOT), while +/- depend on context.
  */
 export function isUnaryOperator(
     text: string, 
     prevTokenText: string, 
     prevTokenType: number
 ): boolean {
+    // Tilde is always unary (bitwise NOT)
+    if (text === '~') return true;
+    
     if (text !== '+' && text !== '-') return false;
     
     // Check if previous token indicates unary context

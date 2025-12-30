@@ -214,6 +214,22 @@ function restoreVariables(sql: string, substitutions: VariableSubstitution[]): s
 // ============================================================================
 
 /**
+ * Pre-normalize SQL to fix tokenization mismatches.
+ * Some SQL constructs tokenize differently based on case:
+ * - Scientific notation: 1.23e10 (lowercase 'e') vs 1.23E10 (uppercase 'E')
+ * 
+ * We normalize these to uppercase before lexing so both streams align.
+ */
+function normalizeForTokenization(sql: string): string {
+    // Normalize scientific notation: replace lowercase 'e' in numbers with uppercase 'E'
+    // Pattern matches: integer part (optional decimal), 'e', optional +/-, exponent
+    // Examples: 1e10, 1.23e10, .5e-3, 1.e+5
+    return sql.replace(/(\d+(?:\.\d*)?|\.\d+)e([+-]?\d+)/gi, (match, mantissa, exponent) => {
+        return mantissa + 'E' + exponent;
+    });
+}
+
+/**
  * Format a single SQL statement.
  */
 function formatSingleStatement(sql: string): string {
@@ -221,8 +237,11 @@ function formatSingleStatement(sql: string): string {
         // Extract ${variable} substitutions before formatting
         const { sql: sqlWithPlaceholders, substitutions } = extractVariables(sql);
         
+        // Pre-normalize SQL to fix tokenization mismatches
+        const normalizedSql = normalizeForTokenization(sqlWithPlaceholders);
+        
         // Parse with uppercased SQL (grammar matches uppercase keywords)
-        const upperSql = sqlWithPlaceholders.toUpperCase();
+        const upperSql = normalizedSql.toUpperCase();
         const chars = new antlr4.InputStream(upperSql);
         const lexer = new SqlBaseLexer(chars);
         const tokens = new antlr4.CommonTokenStream(lexer);
@@ -244,14 +263,14 @@ function formatSingleStatement(sql: string): string {
         analyzer.visit(tree);
         const analysis = analyzer.getResult();
         
-        // Re-lex original SQL (with placeholders) to get original token texts
-        const origChars = new antlr4.InputStream(sqlWithPlaceholders);
+        // Re-lex normalized SQL to get token texts (now aligned with uppercase stream)
+        const origChars = new antlr4.InputStream(normalizedSql);
         const origLexer = new SqlBaseLexer(origChars);
         const origTokens = new antlr4.CommonTokenStream(origLexer);
         origTokens.fill();
         
         // Detect noqa:expansion directives
-        const noqaInfo = detectNoqaExpansion(sqlWithPlaceholders);
+        const noqaInfo = detectNoqaExpansion(normalizedSql);
         
         // Format tokens
         const formatted = formatTokens(tokens.tokens, origTokens.tokens, analysis, noqaInfo);
@@ -294,11 +313,44 @@ function formatTokens(
     // Track which simple queries are actually compact (fit within line width)
     const compactQueries = new Set<number>();
     for (const [selectToken, info] of analysis.simpleQueries) {
-        // For subqueries (depth > 0), check if they fit from current position
-        // For main queries (depth === 0), check if they fit from start
-        if (info.spanLength <= MAX_LINE_WIDTH) {
+        // For subqueries (depth > 0), apply tighter width constraint to account for 
+        // surrounding context (CTE prefix, parentheses, outer query continuation).
+        // Typical overhead is 20-40 chars for "WITH name AS (" + ") SELECT ..."
+        const effectiveMaxWidth = info.depth > 0 ? MAX_LINE_WIDTH - 40 : MAX_LINE_WIDTH;
+        if (info.spanLength <= effectiveMaxWidth) {
             compactQueries.add(selectToken);
         }
+    }
+    
+    // Check if set operations should stay inline
+    // Only inline if: 1) there are set operation parens, 2) total length is short,
+    // 3) ALL queries in the set operation are simple (single-item SELECT)
+    let isShortSetOperation = false;
+    if (analysis.setOperandParens.size > 0) {
+        let estimatedQueryLength = 0;
+        for (const tok of tokenList) {
+            if (tok.type !== SqlBaseLexer.WS && tok.type !== antlr4.Token.EOF) {
+                estimatedQueryLength += (tok.text?.length || 0) + 1; // +1 for space
+            }
+        }
+        // Only allow inline if short AND no multi-item clauses exist
+        const hasMultiItemClause = analysis.multiItemClauses.size > 0;
+        isShortSetOperation = estimatedQueryLength <= MAX_LINE_WIDTH && !hasMultiItemClause;
+    }
+    
+    // Check if VALUES statement should stay inline (simple values list)
+    // Only inline if: 1) has values commas, 2) total length is short, 3) NOT tuples (row format)
+    // VALUES 1, 2, 3 -> stays inline if short
+    // VALUES (1, 'a'), (2, 'b') -> always expands (has tuples)
+    let isShortValues = false;
+    if (analysis.valuesCommas.size > 0 && !analysis.valuesHasTuples) {
+        let estimatedQueryLength = 0;
+        for (const tok of tokenList) {
+            if (tok.type !== SqlBaseLexer.WS && tok.type !== antlr4.Token.EOF) {
+                estimatedQueryLength += (tok.text?.length || 0) + 1; // +1 for space
+            }
+        }
+        isShortValues = estimatedQueryLength <= MAX_LINE_WIDTH;
     }
     
     // Helper to find next non-WS token
@@ -465,6 +517,18 @@ function formatTokens(
         if (text === '(') state.insideParens++;
         else if (text === ')' && state.insideParens > 0) state.insideParens--;
         
+        // Track complex type depth for ARRAY<>, MAP<>, STRUCT<>
+        // These use < and > instead of () for type parameters
+        // Note: We increment depth BEFORE processing (for opening <) but decrement AFTER (for closing >)
+        const prevSymName = state.prevTokenType >= 0 ? getSymbolicName(state.prevTokenType) : null;
+        const prevWasComplexTypeKeyword = prevSymName === 'ARRAY' || prevSymName === 'MAP' || prevSymName === 'STRUCT';
+        const wasInsideComplexType = state.complexTypeDepth > 0;
+        if (text === '<' && (prevWasComplexTypeKeyword || state.complexTypeDepth > 0)) {
+            state.complexTypeDepth++;
+        }
+        // Store if we should decrement after output (for closing >)
+        const shouldDecrementComplexTypeAfter = text === '>' && state.complexTypeDepth > 0;
+        
         // Track IN list wrapping - check if we're entering an IN list
         const inListInfo = analysis.inListInfo.get(tokenIndex);
         
@@ -488,7 +552,7 @@ function formatTokens(
             isExpandedWindowOrderBy, isExpandedWindowFrame, isExpandedWindowCloseParen,
             isExpandedPivotAggregateComma, isExpandedPivotForKeyword, isExpandedPivotInKeyword,
             isExpandedPivotInListComma, isExpandedPivotCloseParen,
-            inCompactQuery
+            inCompactQuery, isShortSetOperation, isShortValues
         );
         
         // Handle list commas - look ahead for comments
@@ -513,7 +577,7 @@ function formatTokens(
         if (needsNewline) {
             outputWithNewline(builder, comments, indent, state);
         } else {
-            outputWithoutNewline(builder, comments, text, state, currentTokenIsUnaryOperator, ctx.isLateralViewComma);
+            outputWithoutNewline(builder, comments, text, symbolicName, state, currentTokenIsUnaryOperator, ctx.isLateralViewComma);
         }
         
         builder.push(outputText);
@@ -557,10 +621,23 @@ function formatTokens(
             };
         }
         
-        // Handle multi-WHEN CASE newline after CASE
+        // Handle multi-WHEN CASE newline after CASE or after value expression
+        // For searchedCase (CASE WHEN ...), newline goes after CASE
+        // For simpleCase (CASE x WHEN ...), newline goes after value expression
         if (analysis.multiWhenCaseTokens.has(tokenIndex)) {
-            builder.push('\n');
+            // Check if this CASE has a value expression (simpleCase)
+            // If so, we'll add the newline after the value, not here
+            const isSimpleCase = analysis.simpleCaseTokens?.has(tokenIndex);
+            if (!isSimpleCase) {
+                // searchedCase - newline right after CASE
+                builder.push('\n');
+            }
             state.caseDepth++;
+        }
+        
+        // For simpleCase, add newline after the value expression
+        if (analysis.simpleCaseValueEndTokens?.has(tokenIndex)) {
+            builder.push('\n');
         }
         
         // Track subquery depth changes
@@ -649,6 +726,11 @@ function formatTokens(
         // Decrease CASE depth after END
         if (analysis.caseEndTokens.has(tokenIndex) && state.caseDepth > 0) {
             state.caseDepth--;
+        }
+        
+        // Decrement complex type depth after outputting closing >
+        if (shouldDecrementComplexTypeAfter) {
+            state.complexTypeDepth--;
         }
         
         // Reset clause flags
@@ -745,6 +827,7 @@ function estimateNextInListItemLength(
 function getTokenContext(tokenIndex: number, analysis: AnalyzerResult) {
     return {
         isInIdentifierContext: analysis.identifierTokens.has(tokenIndex),
+        isInQualifiedName: analysis.qualifiedNameTokens.has(tokenIndex),
         isFunctionCall: analysis.functionCallTokens.has(tokenIndex),
         isClauseStart: analysis.clauseStartTokens.has(tokenIndex),
         isListComma: analysis.listItemCommas.has(tokenIndex),
@@ -797,7 +880,9 @@ function determineOutputText(
         return isBuiltIn ? text.toUpperCase() : text;
     }
     
-    // Identifier context - preserve
+    // Identifier context - preserve casing
+    // When a token is marked as identifier by the parse tree, it means the grammar
+    // is using it as an identifier (column name, table name, etc.), so preserve casing.
     if (ctx.isInIdentifierContext) {
         return text;
     }
@@ -834,7 +919,9 @@ function determineNewlineAndIndent(
     isExpandedPivotInKeyword: boolean,
     isExpandedPivotInListComma: boolean,
     isExpandedPivotCloseParen: boolean,
-    inCompactQuery: boolean
+    inCompactQuery: boolean,
+    isShortSetOperation: boolean,
+    isShortValues: boolean
 ): { needsNewline: boolean; indent: string } {
     let needsNewline = false;
     let indent = '';
@@ -907,20 +994,20 @@ function determineNewlineAndIndent(
         indent = baseIndent;
     }
     
-    // Clause start newline - SKIP if inside a compact query
-    if (!state.isFirstNonWsToken && ctx.isClauseStart && !ctx.isInIdentifierContext && !inCompactQuery) {
+    // Clause start newline - SKIP if inside a compact query OR short set operation
+    if (!state.isFirstNonWsToken && ctx.isClauseStart && !ctx.isInIdentifierContext && !inCompactQuery && !isShortSetOperation) {
         needsNewline = true;
         indent = baseIndent;
     }
     
-    // Set operation operand parens
-    if (ctx.isSetOperandParen && !state.isFirstNonWsToken) {
+    // Set operation operand parens - SKIP if short set operation
+    if (ctx.isSetOperandParen && !state.isFirstNonWsToken && !isShortSetOperation) {
         needsNewline = true;
         indent = baseIndent;
     }
     
-    // Subquery close paren
-    if (ctx.isSubqueryCloseParen) {
+    // Subquery close paren - only add newline if NOT in a compact query
+    if (ctx.isSubqueryCloseParen && !inCompactQuery) {
         needsNewline = true;
         indent = indentCalc.getBaseIndent(state.subqueryDepth - 1);
     }
@@ -972,7 +1059,10 @@ function determineNewlineAndIndent(
     }
     
     // List comma handling - but NOT for IN list commas (those use wrap logic instead)
-    if (ctx.isListComma && state.insideFunctionArgs === 0 && !isInListComma(tokenIndex, analysis)) {
+    // Also skip for commas inside complex types like MAP<STRING, INT>
+    // Also skip for commas inside EXCEPT clause (column exclusion)
+    const isExceptClauseToken = analysis.exceptClauseTokens.has(tokenIndex);
+    if (ctx.isListComma && state.insideFunctionArgs === 0 && !isInListComma(tokenIndex, analysis) && state.complexTypeDepth === 0 && !isExceptClauseToken) {
         needsNewline = true;
         indent = indentCalc.getCommaIndent(state.subqueryDepth, state.ddlDepth);
         state.isFirstListItem = false;
@@ -993,8 +1083,8 @@ function determineNewlineAndIndent(
         state.justOutputCommaFirstStyle = true;
     }
     
-    // VALUES comma
-    if (ctx.isValuesComma) {
+    // VALUES comma - expand only if the VALUES statement is long
+    if (ctx.isValuesComma && !isShortValues) {
         needsNewline = true;
         indent = baseIndent;
         state.justOutputCommaFirstStyle = true;
@@ -1047,10 +1137,12 @@ function determineNewlineAndIndent(
         state.afterSetKeyword = false;
     }
     
-    // First tuple after VALUES
+    // First tuple after VALUES - expand only if the VALUES statement is long
     if (!ctx.isValuesComma && state.afterValuesKeyword && symbolicName !== 'VALUES' && state.isFirstListItem) {
-        needsNewline = true;
-        indent = baseIndent;
+        if (!isShortValues) {
+            needsNewline = true;
+            indent = baseIndent;
+        }
         state.isFirstListItem = false;
         state.afterValuesKeyword = false;
     }
@@ -1110,6 +1202,7 @@ function outputWithoutNewline(
     builder: OutputBuilder,
     comments: CommentManager,
     text: string,
+    symbolicName: string | null,
     state: ReturnType<typeof createInitialState>,
     currentTokenIsUnaryOperator: boolean,
     isLateralViewComma: boolean = false
@@ -1123,6 +1216,10 @@ function outputWithoutNewline(
         const lastChar = builder.getLastChar();
         const prevIsDoubleColon = lastChar === ':' && text !== ':';
         
+        // Check if previous token was actually a DOT token (member access), not a decimal like "1."
+        const prevSymbolicName = state.prevTokenType >= 0 ? getSymbolicName(state.prevTokenType) : null;
+        const prevWasDotToken = prevSymbolicName === 'DOT';
+        
         const skipSpace = shouldSkipSpace(builder, text, {
             prevWasFunctionName: state.prevWasFunctionName,
             prevWasBuiltInFunctionKeyword: state.prevWasBuiltInFunctionKeyword,
@@ -1134,9 +1231,14 @@ function outputWithoutNewline(
             afterWhereKeyword: state.afterWhereKeyword,
             afterHavingKeyword: state.afterHavingKeyword,
             prevTokenWasUnaryOperator: state.prevTokenWasUnaryOperator && 
-                (state.prevTokenText === '-' || state.prevTokenText === '+'),
+                (state.prevTokenText === '-' || state.prevTokenText === '+' || state.prevTokenText === '~'),
+            currentTokenIsUnaryOperator,
             isLateralViewComma,
             prevIsDoubleColon,
+            prevTokenText: state.prevTokenText,
+            currentTokenIsStringLiteral: symbolicName === 'STRING_LITERAL',
+            prevWasDotToken,
+            complexTypeDepth: state.complexTypeDepth,
         });
         
         const needsCommaSpace = shouldAddCommaSpace(builder, state.insideParens, state.justOutputCommaFirstStyle);

@@ -50,7 +50,7 @@ export const windowFunctionTests: TestSuite = {
         {
             name: 'Window stays inline when line under 140 chars',
             input: 'select row_number() over (partition by very_long_column_name_one, very_long_column_name_two order by another_long_name) from t',
-            expected: 'SELECT ROW_NUMBER() OVER (PARTITION BY very_long_column_name_one, very_long_column_name_two ORDER BY another_long_name)\nFROM t',
+            expected: 'SELECT ROW_NUMBER() OVER (PARTITION BY very_long_column_name_one, very_long_column_name_two ORDER BY another_long_name) FROM t',
         },
         {
             name: 'Window expands when full line exceeds 140 chars',
@@ -73,28 +73,29 @@ export const windowFunctionTests: TestSuite = {
 export const lambdaTests: TestSuite = {
     name: 'Lambda Expressions',
     tests: [
+        // Lambda expressions in single-item SELECT should stay inline
+        // (commas inside function calls don't count as multiple select items)
         {
             name: 'Lambda expression (TRANSFORM)',
             input: 'select transform(arr, x -> x + 1) from t',
-            expected: 'SELECT TRANSFORM(arr, x -> x + 1)\nFROM t',
+            expected: 'SELECT TRANSFORM(arr, x -> x + 1) FROM t',
         },
         {
             name: 'Lambda expression (FILTER)',
             input: 'select filter(arr, x -> x > 0) from t',
-            expected: 'SELECT FILTER(arr, x -> x > 0)\nFROM t',
+            expected: 'SELECT FILTER(arr, x -> x > 0) FROM t',
         },
         {
             name: 'Lambda expression (AGGREGATE)',
             input: 'select aggregate(arr, 0, (acc, x) -> acc + x) from t',
-            expected: 'SELECT AGGREGATE(arr, 0, (acc, x) -> acc + x)\nFROM t',
+            expected: 'SELECT AGGREGATE(arr, 0, (acc, x) -> acc + x) FROM t',
         },
         
-        // === BUG: AGGREGATE FUNCTION WITH 4 ARGS ===
-        // 4-argument AGGREGATE with finish lambda should not split
+        // 4-argument AGGREGATE with finish lambda
         {
             name: 'AGGREGATE with 4 args (with finish)',
             input: 'select aggregate(arr, 0, (acc, x) -> acc + x, acc -> acc * 10) from t',
-            expected: 'SELECT AGGREGATE(arr, 0, (acc, x) -> acc + x, acc -> acc * 10)\nFROM t',
+            expected: 'SELECT AGGREGATE(arr, 0, (acc, x) -> acc + x, acc -> acc * 10) FROM t',
         },
     ],
 };
@@ -135,7 +136,7 @@ export const stackFormattingTests: TestSuite = {
         {
             name: 'Short STACK stays inline',
             input: 'select stack(2, \'a\', 1, \'b\', 2) from t',
-            expected: 'SELECT STACK(2, \'a\', 1, \'b\', 2)\nFROM t',
+            expected: "SELECT STACK(2, 'a', 1, 'b', 2) FROM t",
         },
         {
             name: 'Long STACK expands by pairs',

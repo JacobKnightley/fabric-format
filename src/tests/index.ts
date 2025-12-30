@@ -24,6 +24,7 @@ import { semicolonTests } from './semicolon.test.js';
 import { noqaStatementTests, noqaExpansionTests } from './noqa.test.js';
 import { compactQueryTests } from './compact-query.test.js';
 import { magicSqlSuite, runMagicSqlSuite } from './magic-sql.test.js';
+import { edgeCaseBugs } from './edge-case.test.js';
 
 // All test suites in order
 const allSuites = [
@@ -60,6 +61,7 @@ const allSuites = [
     noqaStatementTests,
     noqaExpansionTests,
     compactQueryTests,
+    edgeCaseBugs,
 ];
 
 function main(): void {

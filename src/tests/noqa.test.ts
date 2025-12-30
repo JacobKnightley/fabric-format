@@ -81,7 +81,7 @@ export const noqaExpansionTests: TestSuite = {
         {
             name: 'noqa:expansion with block comment',
             input: 'select coalesce(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p) /* noqa:expansion */\nfrom t',
-            expected: 'SELECT COALESCE(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p) /* noqa:expansion */\nFROM t',
+            expected: 'SELECT COALESCE(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p) /* noqa:expansion */ FROM t',
         },
         {
             name: 'noqa:expansion case insensitive',

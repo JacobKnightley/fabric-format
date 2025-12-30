@@ -32,6 +32,7 @@ export class ParseTreeAnalyzer extends SqlBaseParserVisitor {
     identifierTokens: Set<number> = new Set();
     functionCallTokens: Set<number> = new Set();
     clauseStartTokens: Set<number> = new Set();
+    qualifiedNameTokens: Set<number> = new Set();  // Tokens that are part of qualified names (t.column)
     
     // List formatting
     listItemCommas: Set<number> = new Set();
@@ -68,6 +69,7 @@ export class ParseTreeAnalyzer extends SqlBaseParserVisitor {
     
     // DML handling
     valuesCommas: Set<number> = new Set();
+    valuesHasTuples: boolean = false; // true if VALUES contains tuples like (a, b), (c, d)
     setClauseCommas: Set<number> = new Set();
     setKeywordToken: number = -1;
     
@@ -76,10 +78,15 @@ export class ParseTreeAnalyzer extends SqlBaseParserVisitor {
     caseWhenTokens: Set<number> = new Set();
     caseElseTokens: Set<number> = new Set();
     caseEndTokens: Set<number> = new Set();
+    simpleCaseTokens: Set<number> = new Set();  // CASE tokens that have value expressions (simpleCase)
+    simpleCaseValueEndTokens: Set<number> = new Set();  // Tokens after value in CASE x WHEN ...
     
     // Grouping analytics
     groupingAnalyticsParens: Set<number> = new Set();
     private insideGroupingAnalytics: boolean = false;
+    
+    // EXCEPT clause (column exclusion in SELECT)
+    exceptClauseTokens: Set<number> = new Set(); // tokens inside EXCEPT (...) for column exclusion
     
     // SET configuration
     setConfigTokens: Set<number> = new Set();
@@ -123,6 +130,7 @@ export class ParseTreeAnalyzer extends SqlBaseParserVisitor {
             identifierTokens: this.identifierTokens,
             functionCallTokens: this.functionCallTokens,
             clauseStartTokens: this.clauseStartTokens,
+            qualifiedNameTokens: this.qualifiedNameTokens,
             listItemCommas: this.listItemCommas,
             listFirstItems: this.listFirstItems,
             multiItemClauses: this.multiItemClauses,
@@ -142,13 +150,17 @@ export class ParseTreeAnalyzer extends SqlBaseParserVisitor {
             ddlFirstColumn: this.ddlFirstColumn,
             ddlMultiColumn: this.ddlMultiColumn,
             valuesCommas: this.valuesCommas,
+            valuesHasTuples: this.valuesHasTuples,
             setClauseCommas: this.setClauseCommas,
             setKeywordToken: this.setKeywordToken,
             multiWhenCaseTokens: this.multiWhenCaseTokens,
             caseWhenTokens: this.caseWhenTokens,
             caseElseTokens: this.caseElseTokens,
             caseEndTokens: this.caseEndTokens,
+            simpleCaseTokens: this.simpleCaseTokens,
+            simpleCaseValueEndTokens: this.simpleCaseValueEndTokens,
             groupingAnalyticsParens: this.groupingAnalyticsParens,
+            exceptClauseTokens: this.exceptClauseTokens,
             setConfigTokens: this.setConfigTokens,
             mergeUsingTokens: this.mergeUsingTokens,
             mergeOnTokens: this.mergeOnTokens,
@@ -207,6 +219,57 @@ export class ParseTreeAnalyzer extends SqlBaseParserVisitor {
     
     visitErrorCapturingIdentifier(ctx: any): any {
         this._markIdentifier(ctx);
+        return this.visitChildren(ctx);
+    }
+    
+    /**
+     * Visit qualified name (e.g., table.column, db.schema.table.column)
+     * GRAMMAR-DRIVEN: qualifiedName : identifier (DOT identifier)*
+     * 
+     * Context-sensitive keyword handling: In qualified names, even tokens that are
+     * keywords (like USER, TABLE) should be treated as identifiers and preserve casing.
+     * This is because the grammar context (qualifiedName rule) makes them identifiers.
+     */
+    visitQualifiedName(ctx: any): any {
+        // Mark all tokens in the qualified name as identifiers, except DOT tokens
+        if (ctx.start && ctx.stop) {
+            for (let i = ctx.start.tokenIndex; i <= ctx.stop.tokenIndex; i++) {
+                this.identifierTokens.add(i);
+                this.qualifiedNameTokens.add(i);  // Also track as qualified name
+            }
+        }
+        // Still visit children to handle nested contexts
+        return this.visitChildren(ctx);
+    }
+    
+    /**
+     * Visit dereference (field access like user.address, table.column)
+     * GRAMMAR-DRIVEN: base=primaryExpression DOT fieldName=identifier
+     * 
+     * When a keyword like USER or TABLE appears before DOT, it should be treated
+     * as an identifier (table/column alias), not as a keyword.
+     * Similarly, keywords appearing as field names (like KEY, ORDER) should preserve casing.
+     */
+    visitDereference(ctx: any): any {
+        // Mark the base token as an identifier when it's being dereferenced
+        // This handles cases like: user.address where USER is a keyword but should be preserved
+        if (ctx.base && ctx.base.start) {
+            // Mark the base expression tokens as identifiers
+            for (let i = ctx.base.start.tokenIndex; i <= (ctx.base.stop?.tokenIndex ?? ctx.base.start.tokenIndex); i++) {
+                this.identifierTokens.add(i);
+                this.qualifiedNameTokens.add(i);  // Also track as qualified name
+            }
+        }
+        
+        // Mark the field name (right side after dot) as an identifier
+        // This handles cases like: a.key, a.order where KEY, ORDER are keywords but used as column names
+        if (ctx.fieldName && ctx.fieldName.start) {
+            for (let i = ctx.fieldName.start.tokenIndex; i <= (ctx.fieldName.stop?.tokenIndex ?? ctx.fieldName.start.tokenIndex); i++) {
+                this.identifierTokens.add(i);
+                this.qualifiedNameTokens.add(i);  // Also track as qualified name
+            }
+        }
+        
         return this.visitChildren(ctx);
     }
     
@@ -343,6 +406,13 @@ export class ParseTreeAnalyzer extends SqlBaseParserVisitor {
     }
     
     // ========== CLAUSE-STARTING CONTEXTS ==========
+    
+    visitExceptClause(ctx: any): any {
+        // Mark all tokens inside EXCEPT (...) clause for column exclusion
+        // These tokens should not trigger expansion
+        this._markAllDescendantTokens(ctx, this.exceptClauseTokens);
+        return this.visitChildren(ctx);
+    }
     
     visitFromClause(ctx: any): any {
         this._markClauseStart(ctx);
@@ -596,6 +666,9 @@ export class ParseTreeAnalyzer extends SqlBaseParserVisitor {
     }
     
     visitNamedQuery(ctx: any): any {
+        // Increment depth for CTE body - it's effectively a subquery
+        this.subqueryDepth++;
+        
         if (ctx.children) {
             for (const child of ctx.children) {
                 if (child.symbol) {
@@ -608,7 +681,9 @@ export class ParseTreeAnalyzer extends SqlBaseParserVisitor {
                 }
             }
         }
-        return this.visitChildren(ctx);
+        const result = this.visitChildren(ctx);
+        this.subqueryDepth--;
+        return result;
     }
     
     // ========== SUBQUERY CONTEXTS ==========
@@ -644,6 +719,23 @@ export class ParseTreeAnalyzer extends SqlBaseParserVisitor {
         return this.visitChildren(ctx);
     }
     
+    visitCreateUserDefinedFunction(ctx: any): any {
+        // Mark the function name (identifierReference) as a function call
+        // so there's no space before the opening paren: CREATE FUNCTION f(...) not f (...)
+        if (ctx.children) {
+            for (const child of ctx.children) {
+                if (child.ruleIndex !== undefined) {
+                    const ruleName = SqlBaseParser.ruleNames[child.ruleIndex];
+                    if (ruleName === 'identifierReference' && child.start) {
+                        this.functionCallTokens.add(child.start.tokenIndex);
+                        break;  // Only mark the first one (function name)
+                    }
+                }
+            }
+        }
+        return this.visitChildren(ctx);
+    }
+
     // ========== DML CONTEXTS ==========
     
     visitInsertInto(ctx: any): any {
@@ -668,6 +760,13 @@ export class ParseTreeAnalyzer extends SqlBaseParserVisitor {
     
     visitSetConfiguration(ctx: any): any {
         this._markSetConfigTokens(ctx);
+        return this.visitChildren(ctx);
+    }
+    
+    visitResetConfiguration(ctx: any): any {
+        // GRAMMAR-DRIVEN: RESET .*?
+        // Mark all tokens after RESET as configuration tokens to preserve casing
+        this._markResetConfigTokens(ctx);
         return this.visitChildren(ctx);
     }
     
@@ -785,6 +884,9 @@ export class ParseTreeAnalyzer extends SqlBaseParserVisitor {
         // Check SELECT clause - must have single item
         if (!selectClause || !this._hasSingleSelectItem(selectClause)) return;
         
+        // Check for multi-WHEN CASE expressions (which force expansion)
+        if (selectClause && this._hasMultiWhenCase(selectClause)) return;
+        
         // Check WHERE clause - must have 0 or 1 condition (no AND/OR)
         if (whereClause && this._hasMultipleConditions(whereClause)) return;
         
@@ -878,25 +980,63 @@ export class ParseTreeAnalyzer extends SqlBaseParserVisitor {
         for (const child of selectClause.children) {
             const className = child.constructor?.name || '';
             if (className === 'NamedExpressionSeqContext') {
-                // Count items by looking for commas
+                // Count items by looking for commas that are DIRECT children of namedExpressionSeq
+                // Commas inside function calls, type parameters, etc. should not be counted
                 let commaCount = 0;
-                const countCommas = (node: any): void => {
-                    if (!node) return;
-                    if (node.symbol && node.symbol.type === getTokenType('COMMA')) {
-                        commaCount++;
-                    }
-                    if (node.children) {
-                        for (const c of node.children) {
-                            countCommas(c);
+                if (child.children) {
+                    for (const seqChild of child.children) {
+                        if (seqChild.symbol && seqChild.symbol.type === getTokenType('COMMA')) {
+                            commaCount++;
                         }
                     }
-                };
-                countCommas(child);
+                }
                 return commaCount === 0; // Single item means no commas
             }
         }
         
         return true; // Default to true if no namedExpressionSeq (like SELECT *)
+    }
+    
+    /**
+     * Check if a clause contains a CASE expression with multiple WHEN clauses.
+     * Such CASE expressions force expansion and make the query non-compact.
+     */
+    private _hasMultiWhenCase(clause: any): boolean {
+        if (!clause) return false;
+        
+        const checkForMultiWhenCase = (node: any): boolean => {
+            if (!node) return false;
+            
+            const className = node.constructor?.name || '';
+            // Check for simpleCase or searchedCase contexts
+            if (className === 'SimpleCaseContext' || className === 'SearchedCaseContext') {
+                // Count WHEN tokens
+                let whenCount = 0;
+                if (node.children) {
+                    for (const child of node.children) {
+                        if (child.symbol) {
+                            const symName = SqlBaseLexer.symbolicNames[child.symbol.type];
+                            if (symName === 'WHEN') whenCount++;
+                        }
+                        // Also check whenClause contexts
+                        const childClassName = child.constructor?.name || '';
+                        if (childClassName === 'WhenClauseContext') whenCount++;
+                    }
+                }
+                if (whenCount > 1) return true;
+            }
+            
+            // Recurse into children
+            if (node.children) {
+                for (const child of node.children) {
+                    if (checkForMultiWhenCase(child)) return true;
+                }
+            }
+            
+            return false;
+        };
+        
+        return checkForMultiWhenCase(clause);
     }
     
     /**
@@ -1228,7 +1368,16 @@ export class ParseTreeAnalyzer extends SqlBaseParserVisitor {
         let caseToken: any = null;
         let elseToken: any = null;
         let endToken: any = null;
+        let valueExpression: any = null;
         const whenTokens: any[] = [];
+        
+        // Check if this is a simpleCase (has 'value' property) vs searchedCase
+        // simpleCase: CASE value=expression whenClause+ ELSE? END
+        // searchedCase: CASE whenClause+ ELSE? END
+        const isSimpleCase = ctx.value !== undefined;
+        if (isSimpleCase && ctx.value) {
+            valueExpression = ctx.value;
+        }
         
         for (const child of ctx.children) {
             if (child.symbol) {
@@ -1258,6 +1407,14 @@ export class ParseTreeAnalyzer extends SqlBaseParserVisitor {
         
         if (whenCount > 1 && caseToken) {
             this.multiWhenCaseTokens.add(caseToken.tokenIndex);
+            
+            // For simpleCase with value, mark the CASE token and the position after value expression
+            // So the newline goes after "CASE x" not after "CASE"
+            if (isSimpleCase && valueExpression && valueExpression.stop) {
+                this.simpleCaseTokens.add(caseToken.tokenIndex);
+                this.simpleCaseValueEndTokens.add(valueExpression.stop.tokenIndex);
+            }
+            
             for (const whenToken of whenTokens) {
                 this.caseWhenTokens.add(whenToken.tokenIndex);
             }
@@ -1330,6 +1487,18 @@ export class ParseTreeAnalyzer extends SqlBaseParserVisitor {
             }
         }
         return null;
+    }
+    
+    private _markAllDescendantTokens(ctx: any, targetSet: Set<number>): void {
+        // Mark all tokens in this context and its descendants
+        if (!ctx) return;
+        if (ctx.symbol) {
+            targetSet.add(ctx.symbol.tokenIndex);
+        } else if (ctx.children) {
+            for (const child of ctx.children) {
+                this._markAllDescendantTokens(child, targetSet);
+            }
+        }
     }
     
     private _markIdentifier(ctx: any): void {
@@ -1564,23 +1733,32 @@ export class ParseTreeAnalyzer extends SqlBaseParserVisitor {
         }
     }
     
-    private _markDdlCommasInContext(ctx: any): number {
+    private _markDdlCommasInContext(ctx: any, angleDepth: number = 0): number {
         if (!ctx || !ctx.children) return 0;
         let count = 0;
         for (const child of ctx.children) {
-            if (child.symbol && child.symbol.type === getTokenType('COMMA')) {
-                this.ddlColumnCommas.add(child.symbol.tokenIndex);
-                count++;
+            if (child.symbol) {
+                const tokenType = child.symbol.type;
+                if (tokenType === getTokenType('LT')) {
+                    // Entering complex type like ARRAY<...> or MAP<...>
+                    angleDepth++;
+                } else if (tokenType === getTokenType('GT')) {
+                    // Exiting complex type
+                    if (angleDepth > 0) angleDepth--;
+                } else if (tokenType === getTokenType('COMMA') && angleDepth === 0) {
+                    // Only mark as DDL comma if not inside angle brackets (complex type)
+                    this.ddlColumnCommas.add(child.symbol.tokenIndex);
+                    count++;
+                }
             } else if (child.children) {
-                count += this._markDdlCommasInContext(child);
+                count += this._markDdlCommasInContext(child, angleDepth);
             }
         }
         return count;
     }
     
-    private _markValuesCommas(ctx: any): void {
+    private _markValuesCommas(ctx: any, foundValues: boolean = false): void {
         if (!ctx || !ctx.children) return;
-        let foundValues = false;
         let parenDepth = 0;
         for (const child of ctx.children) {
             if (child.symbol) {
@@ -1590,13 +1768,17 @@ export class ParseTreeAnalyzer extends SqlBaseParserVisitor {
                     foundValues = true;
                 } else if (foundValues && tokenType === getTokenType('LEFT_PAREN')) {
                     parenDepth++;
+                    // If we see a paren right after VALUES, we have tuples
+                    if (parenDepth === 1) {
+                        this.valuesHasTuples = true;
+                    }
                 } else if (foundValues && tokenType === getTokenType('RIGHT_PAREN')) {
                     parenDepth--;
                 } else if (foundValues && parenDepth === 0 && tokenType === getTokenType('COMMA')) {
                     this.valuesCommas.add(child.symbol.tokenIndex);
                 }
             } else if (child.children) {
-                this._markValuesCommas(child);
+                this._markValuesCommas(child, foundValues);
             }
         }
     }
@@ -1635,6 +1817,24 @@ export class ParseTreeAnalyzer extends SqlBaseParserVisitor {
                     this.setConfigTokens.add(child.symbol.tokenIndex);
                 }
             } else if (child.children && foundSet) {
+                this._markSetConfigTokensRecursive(child);
+            }
+        }
+    }
+    
+    private _markResetConfigTokens(ctx: any): void {
+        // Similar to SET, mark all tokens after RESET keyword
+        if (!ctx || !ctx.children) return;
+        let foundReset = false;
+        for (const child of ctx.children) {
+            if (child.symbol) {
+                const symName = SqlBaseLexer.symbolicNames[child.symbol.type];
+                if (symName === 'RESET') {
+                    foundReset = true;
+                } else if (foundReset) {
+                    this.setConfigTokens.add(child.symbol.tokenIndex);
+                }
+            } else if (child.children && foundReset) {
                 this._markSetConfigTokensRecursive(child);
             }
         }

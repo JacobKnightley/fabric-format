@@ -87,6 +87,7 @@ export interface AnalyzerResult {
     identifierTokens: Set<number>;
     functionCallTokens: Set<number>;
     clauseStartTokens: Set<number>;
+    qualifiedNameTokens: Set<number>;  // Tokens that are part of qualified names (t.column)
     
     // List formatting
     listItemCommas: Set<number>;
@@ -122,6 +123,7 @@ export interface AnalyzerResult {
     
     // DML handling
     valuesCommas: Set<number>;
+    valuesHasTuples: boolean; // true if VALUES contains tuples like (a, b), (c, d)
     setClauseCommas: Set<number>;
     setKeywordToken: number;
     
@@ -130,9 +132,14 @@ export interface AnalyzerResult {
     caseWhenTokens: Set<number>;
     caseElseTokens: Set<number>;
     caseEndTokens: Set<number>;
+    simpleCaseTokens: Set<number>;  // CASE tokens that have value expressions (simpleCase)
+    simpleCaseValueEndTokens: Set<number>;  // Position after value in CASE x WHEN ...
     
     // Grouping analytics (ROLLUP/CUBE/GROUPING SETS)
     groupingAnalyticsParens: Set<number>;
+    
+    // EXCEPT clause (column exclusion in SELECT)
+    exceptClauseTokens: Set<number>;
     
     // SET configuration
     setConfigTokens: Set<number>;
@@ -179,6 +186,7 @@ export interface FormattingState {
     caseDepth: number;
     insideParens: number;
     insideFunctionArgs: number;
+    complexTypeDepth: number;  // Tracks nesting in ARRAY<>, MAP<>, STRUCT<>
     
     // Position tracking
     currentColumn: number;

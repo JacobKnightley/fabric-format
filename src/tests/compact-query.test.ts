@@ -68,22 +68,22 @@ export const compactQueryTests: TestSuite = {
             input: 'select * from users where active = true and age > 18',
             expected: 'SELECT *\nFROM users\nWHERE\n    active = TRUE\n    AND age > 18'
         },
-        // Subqueries - outer stays inline if simple, inner expands if complex
+        // Subqueries - both outer and inner stay inline when simple
         {
             name: 'Simple subquery in FROM stays inline',
             input: 'select * from (select id from users) t',
-            expected: 'SELECT * FROM (SELECT id FROM users\n) t'  // Both simple, but closing paren on newline is current behavior
+            expected: 'SELECT * FROM (SELECT id FROM users) t'  // Both simple, both inline
         },
         {
             name: 'Simple subquery in WHERE IN stays inline',
             input: 'select * from orders where user_id in (select id from users)',
-            expected: 'SELECT * FROM orders WHERE user_id IN (SELECT id FROM users\n)'  // Known bug
+            expected: 'SELECT * FROM orders WHERE user_id IN (SELECT id FROM users)'  // Both simple, both inline
         },
         // Complex outer query with simple subquery
         {
             name: 'Complex outer with simple subquery',
             input: 'select name, email from users where id in (select user_id from orders)',
-            expected: 'SELECT\n     name\n    ,email\nFROM users\nWHERE id IN (SELECT user_id FROM orders\n)'  // Known bug
+            expected: 'SELECT\n     name\n    ,email\nFROM users\nWHERE id IN (SELECT user_id FROM orders)'  // Outer expands, inner stays inline
         },
         // Edge cases
         {
@@ -106,11 +106,11 @@ export const compactQueryTests: TestSuite = {
             input: 'select name from users order by last_name, first_name',
             expected: 'SELECT name FROM users ORDER BY\n     last_name\n    ,first_name'
         },
-        // EXISTS subquery - known bug with closing paren
+        // EXISTS subquery - simple subquery stays inline
         {
             name: 'EXISTS with simple subquery',
             input: 'select * from t where exists (select 1 from u)',
-            expected: 'SELECT * FROM t WHERE EXISTS (SELECT 1 FROM u\n)'  // Known bug
+            expected: 'SELECT * FROM t WHERE EXISTS (SELECT 1 FROM u)'  // Fixed: no newline before close paren
         },
         // GROUP BY queries are NOT simple (they expand)
         {

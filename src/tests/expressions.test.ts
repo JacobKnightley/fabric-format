@@ -15,17 +15,17 @@ export const caseExpressionTests: TestSuite = {
         {
             name: 'CASE with single WHEN (inline)',
             input: 'select case when x = 1 then "a" else "b" end, y from t',
-            expected: 'SELECT\n     CASE WHEN x = 1 THEN "A" ELSE "B" END\n    ,y\nFROM t',
+            expected: 'SELECT\n     CASE WHEN x = 1 THEN "a" ELSE "b" END\n    ,y\nFROM t',
         },
         {
             name: 'CASE with multiple WHEN (multiline)',
             input: 'select case when status = 1 then "active" when status = 2 then "pending" when status = 3 then "closed" else "unknown" end, id from t',
-            expected: 'SELECT\n     CASE\n        WHEN status = 1 THEN "ACTIVE"\n        WHEN status = 2 THEN "PENDING"\n        WHEN status = 3 THEN "CLOSED"\n        ELSE "UNKNOWN"\n     END\n    ,id\nFROM t',
+            expected: 'SELECT\n     CASE\n        WHEN status = 1 THEN "active"\n        WHEN status = 2 THEN "pending"\n        WHEN status = 3 THEN "closed"\n        ELSE "unknown"\n     END\n    ,id\nFROM t',
         },
         {
             name: 'CASE without ELSE',
             input: 'select case when x = 1 then "a" when x = 2 then "b" end, y from t',
-            expected: 'SELECT\n     CASE\n        WHEN x = 1 THEN "A"\n        WHEN x = 2 THEN "B"\n     END\n    ,y\nFROM t',
+            expected: 'SELECT\n     CASE\n        WHEN x = 1 THEN "a"\n        WHEN x = 2 THEN "b"\n     END\n    ,y\nFROM t',
         },
         
         // Nested CASE: inner CASE inside THEN stays inline when it's single-WHEN
@@ -163,7 +163,7 @@ export const arrayAccessTests: TestSuite = {
         {
             name: 'Map access with string key',
             input: 'select map["key"], b from t',
-            expected: 'SELECT\n     map["KEY"]\n    ,b\nFROM t',
+            expected: 'SELECT\n     map["key"]\n    ,b\nFROM t',
         },
         {
             name: 'Array access with expression',

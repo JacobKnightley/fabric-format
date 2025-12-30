@@ -155,22 +155,51 @@ export function shouldSkipSpace(
         afterWhereKeyword: boolean;
         afterHavingKeyword: boolean;
         prevTokenWasUnaryOperator: boolean;
+        currentTokenIsUnaryOperator: boolean;  // Whether current token is also unary
         isLateralViewComma: boolean;
         prevIsDoubleColon: boolean;
+        prevTokenText: string;
+        currentTokenIsStringLiteral: boolean;
+        prevWasDotToken: boolean;  // True if previous token was actually a DOT, not a decimal ending with .
+        complexTypeDepth: number;  // Depth inside ARRAY<>, MAP<>, STRUCT<>
     }
 ): boolean {
     const lastChar = builder.getLastChar();
     
+    // Check for hex/binary literals: X'...' or B'...' (case-insensitive)
+    const prevWasHexBinaryPrefix = (context.prevTokenText.toUpperCase() === 'X' || 
+                                     context.prevTokenText.toUpperCase() === 'B') && 
+                                    context.currentTokenIsStringLiteral;
+    
+    // Skip space after dot ONLY if previous token was actually a DOT token (member access)
+    // Not if it's a decimal literal ending with . like "1."
+    const prevWasMemberAccessDot = lastChar === '.' && context.prevWasDotToken;
+    
+    // IMPORTANT: Don't skip space between consecutive unary operators like "- -5"
+    // Otherwise it becomes "--5" which is a line comment!
+    const prevWasUnaryAndCurrentIsUnary = context.prevTokenWasUnaryOperator && context.currentTokenIsUnaryOperator;
+    
+    // Inside complex types (ARRAY<INT>, MAP<STRING, INT>, STRUCT<a:INT>)
+    // Skip spaces around angle brackets and before commas
+    const inComplexType = context.complexTypeDepth > 0;
+    const isComplexTypeBracket = text === '<' || text === '>';
+    const prevWasComplexTypeBracket = lastChar === '<' || lastChar === '>';
+    
+    // If prev was unary and current is also unary (like "- -5"), don't skip space!
+    if (prevWasUnaryAndCurrentIsUnary) {
+        return false;  // Need space to avoid "--" becoming a comment
+    }
+    
     return (
         lastChar === '(' || 
-        lastChar === '.' || 
+        prevWasMemberAccessDot || 
         lastChar === '\n' ||
         text === ')' || 
         text === '.' ||
+        text === ',' ||  // Never add space before comma
         text === '::' || 
         context.prevIsDoubleColon ||
         (text === '(' && (context.prevWasFunctionName || context.prevWasBuiltInFunctionKeyword)) ||
-        (text === ',' && context.insideParens > 0) ||
         context.isLateralViewComma ||
         context.justOutputCommaFirstStyle ||
         context.justOutputMultiArgFunctionNewline ||
@@ -181,7 +210,15 @@ export function shouldSkipSpace(
         context.prevTokenWasUnaryOperator ||
         lastChar === '[' || 
         text === '[' || 
-        text === ']'
+        text === ']' ||
+        prevWasHexBinaryPrefix ||
+        // Complex type handling: no spaces around < and > and : (for struct fields)
+        (inComplexType && isComplexTypeBracket) ||
+        (inComplexType && prevWasComplexTypeBracket) ||
+        (context.prevTokenText === '<' && inComplexType) ||  // Space after < in complex type
+        (text === '>' && inComplexType) ||  // Space before > in complex type
+        (text === ':' && inComplexType) ||  // No space before : in struct field (a:INT)
+        (lastChar === ':' && inComplexType)  // No space after : in struct field
     );
 }
 
