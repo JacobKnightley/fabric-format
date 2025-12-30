@@ -17,9 +17,9 @@ export const utilityTests: TestSuite = {
             expected: 'SHOW TABLES',
         },
         {
-            name: 'SHOW SYSTEM FUNCTIONS (SYSTEM not in grammar)',
+            name: 'SHOW SYSTEM FUNCTIONS',
             input: 'show system functions',
-            expected: 'SHOW system FUNCTIONS',  // SYSTEM not in grammar
+            expected: 'SHOW SYSTEM FUNCTIONS',
         },
         {
             name: 'DESCRIBE table',
@@ -47,9 +47,9 @@ export const utilityTests: TestSuite = {
             expected: 'ANALYZE TABLE t COMPUTE STATISTICS FOR COLUMNS a, b',
         },
         {
-            name: 'ANALYZE TABLE NOSCAN (NOSCAN not in grammar)',
+            name: 'ANALYZE TABLE NOSCAN',
             input: 'analyze table t compute statistics noscan',
-            expected: 'ANALYZE TABLE t COMPUTE STATISTICS noscan',  // NOSCAN not in grammar
+            expected: 'ANALYZE TABLE t COMPUTE STATISTICS NOSCAN',
         },
         {
             name: 'SET config preserves lowercase',

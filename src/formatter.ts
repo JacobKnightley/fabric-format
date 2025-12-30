@@ -498,9 +498,21 @@ function formatTokens(
         // Detect unary operator
         const currentTokenIsUnaryOperator = isUnaryOperator(text, state.prevTokenText, state.prevTokenType);
         
+        // Get next token type for lookahead (skip WS tokens)
+        let nextTokenType: number | null = null;
+        for (let j = i + 1; j < tokenList.length; j++) {
+            const nextToken = tokenList[j];
+            if (nextToken.type !== SqlBaseLexer.WS && 
+                nextToken.type !== SqlBaseLexer.SIMPLE_COMMENT &&
+                nextToken.type !== SqlBaseLexer.BRACKETED_COMMENT) {
+                nextTokenType = nextToken.type;
+                break;
+            }
+        }
+        
         // Determine output text
         const outputText = determineOutputText(
-            tokenIndex, tokenType, text, symbolicName, ctx, analysis
+            tokenIndex, tokenType, text, symbolicName, ctx, analysis, nextTokenType
         );
         
         // Check for function-like keyword
@@ -736,8 +748,17 @@ function formatTokens(
         // Reset clause flags
         updateClauseFlags(symbolicName, ctx, state);
         
+        // Check if this token is a partition transform function (followed by paren)
+        const partitionTransformFunctions = new Set([
+            'BUCKET', 'TRUNCATE',
+            'YEAR', 'YEARS', 'MONTH', 'MONTHS',
+            'DAY', 'DAYS', 'HOUR', 'HOURS',
+        ]);
+        const isPartitionTransformFunc = partitionTransformFunctions.has(text.toUpperCase()) &&
+            nextTokenType !== null && getSymbolicName(nextTokenType) === 'LEFT_PAREN';
+        
         // Update previous token tracking
-        state.prevWasFunctionName = ctx.isFunctionCall;
+        state.prevWasFunctionName = ctx.isFunctionCall || isPartitionTransformFunc;
         state.prevWasBuiltInFunctionKeyword = isBuiltInFunctionKeyword;
         state.isFirstNonWsToken = false;
         state.prevTokenWasUnaryOperator = currentTokenIsUnaryOperator;
@@ -861,7 +882,8 @@ function determineOutputText(
     text: string,
     symbolicName: string | null,
     ctx: ReturnType<typeof getTokenContext>,
-    analysis: AnalyzerResult
+    analysis: AnalyzerResult,
+    nextTokenType: number | null  // Added: peek at next token
 ): string {
     // SET config tokens - preserve casing
     if (analysis.setConfigTokens.has(tokenIndex)) {
@@ -886,6 +908,43 @@ function determineOutputText(
     const structuralKeywords = new Set(['AS', 'ON', 'AND', 'OR', 'IN', 'FOR', 'USING']);
     if (symbolicName && structuralKeywords.has(symbolicName)) {
         return text.toUpperCase();
+    }
+    
+    // Extension keywords: Should always be uppercase, even in identifier context.
+    // Keywords not in Spark grammar (Delta Lake extensions).
+    const extensionKeywords = new Set([
+        // Spark SQL extensions not in grammar
+        'SYSTEM',   // SHOW SYSTEM FUNCTIONS
+        'NOSCAN',   // ANALYZE TABLE ... NOSCAN
+        // Delta Lake keywords (none are in the Apache Spark grammar)
+        'VACUUM', 'RETAIN',
+        'RESTORE',
+        'CLONE', 'SHALLOW', 'DEEP',
+        'OPTIMIZE', 'ZORDER',
+    ]);
+    const textUpper = text.toUpperCase();
+    if (extensionKeywords.has(textUpper)) {
+        return textUpper;
+    }
+    
+    // Partition transform functions: uppercase only when followed by '('
+    // These are grammar keywords but appear as transformName=identifier in grammar.
+    // When used as column names (not followed by '('), they should preserve casing.
+    // e.g., "PARTITIONED BY (bucket(3, col))" - BUCKET uppercase
+    // e.g., "SELECT year FROM t" - year lowercase (it's a column name)
+    const partitionTransformFunctions = new Set([
+        'BUCKET', 'TRUNCATE',
+        'YEAR', 'YEARS', 'MONTH', 'MONTHS',
+        'DAY', 'DAYS', 'HOUR', 'HOURS',
+    ]);
+    if (partitionTransformFunctions.has(textUpper)) {
+        // Check if next token is '(' (function call context)
+        const isFollowedByParen = nextTokenType !== null && 
+            getSymbolicName(nextTokenType) === 'LEFT_PAREN';
+        if (isFollowedByParen) {
+            return textUpper;
+        }
+        // Not followed by paren - treat as regular identifier, preserve casing
     }
     
     // Identifier context - preserve casing

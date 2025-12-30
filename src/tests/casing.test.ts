@@ -118,12 +118,8 @@ export const builtinFunctionCasingTests: TestSuite = {
             input: "select to_utc_timestamp(x, 'America/New_York') from t",
             expected: "SELECT TO_UTC_TIMESTAMP(x, 'America/New_York') FROM t",
         },
-        // EXTRACT function (note: DAYOFWEEK is not in grammar's datetimeUnit)
-        {
-            name: 'EXTRACT with DAYOFWEEK (not in grammar)',
-            input: 'select extract(dayofweek from x) from t',
-            expected: 'SELECT EXTRACT(dayofweek FROM x) FROM t',
-        },
+        // Note: EXTRACT(DAYOFWEEK FROM x) is not valid Spark SQL.
+        // Use the DAYOFWEEK() function instead: SELECT DAYOFWEEK(x) FROM t
         {
             name: 'EXTRACT with YEAR',
             input: 'select extract(year from x) from t',

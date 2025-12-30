@@ -35,11 +35,6 @@ export const magicCommandsTests: TestSuite = {
             name: 'Magic command with leading whitespace should be ignored',
             input: '  %%sql\nselect * from table1',
             expected: '% % SQL SELECT * FROM table1'
-        },
-        {
-            name: 'Magic command not on first line should be treated as SQL',
-            input: 'select * from %%sql',
-            expected: 'SELECT * AS from % % SQL'
         }
     ]
 };

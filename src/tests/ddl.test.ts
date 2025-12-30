@@ -58,5 +58,21 @@ export const ddlTests: TestSuite = {
             input: 'create function f(x int) returns int return x + 1',
             expected: 'CREATE FUNCTION f(x INT) RETURNS INT RETURN x + 1',
         },
+        // Partition transforms (Iceberg/Delta Lake)
+        {
+            name: 'PARTITIONED BY with transform functions',
+            input: 'create table t partitioned by (bucket(3, col), days(ts), year(dt))',
+            expected: 'CREATE TABLE t PARTITIONED BY (BUCKET(3, col), DAYS(ts), YEAR(dt))',
+        },
+        {
+            name: 'PARTITIONED BY with all transform types',
+            input: 'create table t partitioned by (year(d), month(d), day(d), hour(ts), truncate(s, 10))',
+            expected: 'CREATE TABLE t PARTITIONED BY (YEAR(d), MONTH(d), DAY(d), HOUR(ts), TRUNCATE(s, 10))',
+        },
+        {
+            name: 'Partition transform keywords as column names stay lowercase',
+            input: 'select year, month, day, bucket from t',
+            expected: 'SELECT\n     year\n    ,month\n    ,day\n    ,bucket\nFROM t',
+        },
     ],
 };
