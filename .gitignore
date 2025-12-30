@@ -1,0 +1,43 @@
+# Node modules
+node_modules/
+
+# TypeScript build output
+dist/
+
+# ANTLR generated files
+src/generated/
+
+# ANTLR jar (downloaded at build time)
+.build/antlr4.jar
+
+# Grammar files (downloaded from Apache Spark at build time)
+grammar/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test coverage
+coverage/
+
+# Example files
+example.sql
+*_formatted.sql
+
+# Debug files
+debug-*.mjs
+debug-*.js
+
+# Rust build artifacts (experimental)
+crates/
+target/

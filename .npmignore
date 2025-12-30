@@ -1,0 +1,27 @@
+# Source files (TypeScript)
+src/
+
+# Test output
+dist/tests/
+
+# Build tools
+.build/
+grammar/
+crates/
+target/
+
+# Development files
+*.jar
+tsconfig.json
+.github/
+
+# Sample files
+sample/
+
+# IDE
+.idea/
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db

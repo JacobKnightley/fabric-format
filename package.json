@@ -1,0 +1,57 @@
+{
+  "name": "@jacobknightley/sparkfmt",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "A fast, opinionated Apache Spark SQL formatter with zero configuration",
+  "main": "dist/index.js",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "types": "dist/index.d.ts",
+  "bin": {
+    "sparkfmt": "dist/cli.js"
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "!dist/tests/**"
+  ],
+  "keywords": [
+    "spark",
+    "sql",
+    "formatter",
+    "databricks",
+    "fabric",
+    "delta-lake",
+    "antlr",
+    "linter"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jacobknightley/sparkfmt.git"
+  },
+  "homepage": "https://github.com/jacobknightley/sparkfmt#readme",
+  "bugs": {
+    "url": "https://github.com/jacobknightley/sparkfmt/issues"
+  },
+  "author": "Jacob Knightley",
+  "license": "MIT",
+  "scripts": {
+    "build:antlr": "python .build/build_antlr_js.py",
+    "build:ts": "tsc",
+    "build": "npm run build:antlr && npm run build:ts",
+    "test": "node dist/tests/index.js",
+    "test:verbose": "node dist/tests/index.js --verbose",
+    "format": "node dist/cli.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "antlr4": "^4.13.2"
+  }
+}
