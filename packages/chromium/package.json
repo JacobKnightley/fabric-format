@@ -1,6 +1,6 @@
 {
   "name": "fabricfmt-chromium",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Edge extension to format Microsoft Fabric Notebook cells",
   "type": "module",
   "scripts": {
