@@ -435,8 +435,6 @@ function formatNotebookContent(content: string): string {
     return content;
   }
   
-  // Detect line ending
-  const lineEnding = content.includes('\r\n') ? '\r\n' : '\n';
   let result = content;
   
   // Process Spark SQL cells in reverse order to preserve line numbers
@@ -451,7 +449,7 @@ function formatNotebookContent(content: string): string {
       cell.isRawCell ? line : `${prefix}${line}`
     );
     lines.splice(cell.contentStartLine, cell.contentEndLine - cell.contentStartLine + 1, ...formattedLines);
-    result = lines.join(lineEnding);
+    result = lines.join('\n');
   }
   
   return result;

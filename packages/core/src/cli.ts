@@ -92,31 +92,11 @@ async function formatFile(content: string, filePath: string): Promise<string> {
 }
 
 /**
- * Detect the line ending style used in content.
- */
-function detectLineEnding(content: string): '\r\n' | '\n' {
-    if (content.includes('\r\n')) {
-        return '\r\n';
-    }
-    return '\n';
-}
-
-/**
- * Normalize line endings to Unix style.
+ * Normalize line endings to LF (Unix style).
+ * This library standardizes on LF for all output.
  */
 function normalizeLineEndings(content: string): string {
     return content.replace(/\r\n/g, '\n');
-}
-
-/**
- * Convert line endings to the specified style.
- */
-function convertLineEndings(content: string, lineEnding: '\r\n' | '\n'): string {
-    const normalized = normalizeLineEndings(content);
-    if (lineEnding === '\r\n') {
-        return normalized.replace(/\n/g, '\r\n');
-    }
-    return normalized;
 }
 
 /** Print main help */
@@ -334,13 +314,11 @@ async function cmdFormat(args: string[]): Promise<void> {
     for (const file of files) {
         try {
             const content = fs.readFileSync(file, 'utf-8');
-            const originalLineEnding = detectLineEnding(content);
             const normalizedContent = normalizeLineEndings(content);
             const formatted = await formatFile(normalizedContent, file);
-            const formattedWithOriginalEndings = convertLineEndings(formatted, originalLineEnding);
             
-            if (formattedWithOriginalEndings !== content) {
-                fs.writeFileSync(file, formattedWithOriginalEndings, 'utf-8');
+            if (formatted !== normalizedContent) {
+                fs.writeFileSync(file, formatted, 'utf-8');
                 console.log(`Formatted ${file}`);
                 formattedCount++;
             }

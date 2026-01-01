@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Fabric Format",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Format Python and SparkSQL cells in Microsoft Fabric Notebooks",
   "host_permissions": [
     "https://*.fabric.microsoft.com/*",

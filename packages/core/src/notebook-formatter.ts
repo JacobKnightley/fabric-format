@@ -66,7 +66,7 @@ const PYTHON_CONFIG: LanguageConfig = {
     metadataMarker: '# METADATA ********************',
     magicPrefix: '# MAGIC ',
     magicSqlCommand: '# MAGIC %%sql',
-    emptyMagic: '# MAGIC',
+    emptyMagic: '# MAGIC ',
     supportsRawSql: false,
     defaultLanguage: 'python',
 };
@@ -77,7 +77,7 @@ const SCALA_CONFIG: LanguageConfig = {
     metadataMarker: '// METADATA ********************',
     magicPrefix: '// MAGIC ',
     magicSqlCommand: '// MAGIC %%sql',
-    emptyMagic: '// MAGIC',
+    emptyMagic: '// MAGIC ',
     supportsRawSql: false,
     defaultLanguage: 'scala',
 };
@@ -88,7 +88,7 @@ const SPARKSQL_CONFIG: LanguageConfig = {
     metadataMarker: '-- METADATA ********************',
     magicPrefix: '-- MAGIC ',
     magicSqlCommand: '-- MAGIC %%sql',
-    emptyMagic: '-- MAGIC',
+    emptyMagic: '-- MAGIC ',
     supportsRawSql: true,
     defaultLanguage: 'sparksql',
 };
@@ -148,12 +148,9 @@ export interface FormatStats {
 // ============================================================================
 
 /**
- * Detect line ending style.
+ * Line ending constant - this library standardizes on LF.
  */
-function detectLineEnding(content: string): string {
-    if (content.includes('\r\n')) return '\r\n';
-    return '\n';
-}
+const LINE_ENDING = '\n';
 
 /**
  * Get language config based on file extension.
@@ -291,7 +288,9 @@ function stripMagicPrefix(line: string, config: LanguageConfig): string {
     if (line.startsWith(config.magicPrefix)) {
         return line.slice(config.magicPrefix.length);
     }
-    if (line.trim() === config.emptyMagic) {
+    // Check for empty magic line (with or without trailing space)
+    const trimmed = line.trim();
+    if (trimmed === config.emptyMagic.trim()) {
         return '';
     }
     return line;
@@ -439,8 +438,7 @@ function replaceCell(
     fileContent: string,
     cell: NotebookCell,
     formattedContent: string,
-    config: LanguageConfig,
-    lineEnding: string
+    config: LanguageConfig
 ): string {
     const lines = fileContent.split(/\r?\n/);
     
@@ -454,7 +452,7 @@ function replaceCell(
     const before = lines.slice(0, cell.contentStartLine);
     const after = lines.slice(cell.contentEndLine + 1);
     
-    return [...before, ...newLines, ...after].join(lineEnding);
+    return [...before, ...newLines, ...after].join(LINE_ENDING);
 }
 
 /**
@@ -494,8 +492,6 @@ export async function formatNotebook(
         return { content, stats };
     }
     
-    const lineEnding = detectLineEnding(content);
-    
     // Initialize Python formatter if needed
     if (formatPythonCells) {
         try {
@@ -527,7 +523,7 @@ export async function formatNotebook(
             
             if (formatResult.changed) {
                 // replaceCell will add back MAGIC prefixes if needed
-                result = replaceCell(result, cell, formatResult.formatted, notebook.config, lineEnding);
+                result = replaceCell(result, cell, formatResult.formatted, notebook.config);
                 stats.sparkSqlCellsFormatted++;
             }
             
@@ -540,7 +536,7 @@ export async function formatNotebook(
             
             if (formatResult.changed) {
                 // replaceCell will add back MAGIC prefixes if needed
-                result = replaceCell(result, cell, formatResult.formatted, notebook.config, lineEnding);
+                result = replaceCell(result, cell, formatResult.formatted, notebook.config);
                 stats.pythonCellsFormatted++;
             }
             
