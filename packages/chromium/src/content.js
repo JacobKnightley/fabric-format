@@ -709,26 +709,37 @@ function isIframeActive() {
   return true;
 }
 
+/**
+ * Find the Fabric status bar element
+ * Returns null if not found
+ */
+function findStatusBar() {
+  // Try multiple selectors - Fabric's class names can change
+  return document.querySelector('div[class*="___fr9w3r0"]') || 
+         document.querySelector('div.f1pha7fy.f1ewtqcl.f5ogflp') ||
+         document.querySelector('div[class*="f1pha7fy"][class*="f1ewtqcl"]') ||
+         // Additional fallback: look for the status bar by structure (contains CellSelection button)
+         document.querySelector('button[name="CellSelection"]')?.parentElement;
+}
+
 function createFloatingButton() {
   if (!isIframeActive()) {
-    return;
+    return false;
   }
 
   const existing = document.getElementById('fabric-formatter-button');
   if (existing) {
     if (existing.isConnected && existing.offsetParent !== null) {
-      return;
+      return true; // Already exists and is valid
     }
     existing.remove();
   }
   
-  const statusBar = document.querySelector('div[class*="___fr9w3r0"]') || 
-                    document.querySelector('div.f1pha7fy.f1ewtqcl.f5ogflp') ||
-                    document.querySelector('div[class*="f1pha7fy"][class*="f1ewtqcl"]');
+  const statusBar = findStatusBar();
   
   if (statusBar) {
     if (statusBar.querySelector('button[name="FormatCells"]')) {
-      return;
+      return true; // Already has our button
     }
     
     const button = document.createElement('button');
@@ -783,10 +794,34 @@ function createFloatingButton() {
     }
     
     log.info('Button injected into status bar');
-    return;
+    return true;
   }
   
   log.debug('Status bar not found, will retry later');
+  return false;
+}
+
+/**
+ * Wait for status bar to appear with exponential backoff
+ * This handles the case where the status bar loads after the page
+ */
+async function waitForStatusBarAndInject(maxWaitMs = 30000) {
+  const startTime = Date.now();
+  let delay = 100; // Start with 100ms
+  const maxDelay = 2000; // Cap at 2 seconds between retries
+  
+  while (Date.now() - startTime < maxWaitMs) {
+    if (createFloatingButton()) {
+      return true;
+    }
+    
+    // Exponential backoff with cap
+    await new Promise(r => setTimeout(r, delay));
+    delay = Math.min(delay * 1.5, maxDelay);
+  }
+  
+  log.warn('Status bar not found after', maxWaitMs / 1000, 'seconds');
+  return false;
 }
 
 // ============================================================================
@@ -824,13 +859,14 @@ async function init() {
   let checkAttempts = 0;
   const maxAttempts = 10;
   
-  const checkForEditors = () => {
+  const checkForEditors = async () => {
     checkAttempts++;
     const editorCount = document.querySelectorAll('.monaco-editor').length;
     
     if (editorCount > 0) {
-      log.debug('Found', editorCount, 'editors, creating button');
-      createFloatingButton();
+      log.debug('Found', editorCount, 'editors, waiting for status bar...');
+      // Use dedicated function to wait for status bar with retries
+      await waitForStatusBarAndInject();
       log.info('Ready - found', editorCount, 'editor(s)');
     } else if (checkAttempts < maxAttempts) {
       setTimeout(checkForEditors, 1000);
@@ -887,12 +923,13 @@ async function init() {
     if (!buttonIsValid && isIframeActive()) {
       const editorCount = document.querySelectorAll('.monaco-editor').length;
       if (editorCount > 0) {
-        setTimeout(() => {
-          const stillNoButton = !document.getElementById('fabric-formatter-button');
-          if (stillNoButton && isIframeActive()) {
+        // Check if status bar was just added
+        const statusBar = findStatusBar();
+        if (statusBar && !statusBar.querySelector('button[name="FormatCells"]')) {
+          setTimeout(() => {
             createFloatingButton();
-          }
-        }, 100);
+          }, 50);
+        }
       }
     }
   });
