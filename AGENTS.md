@@ -127,17 +127,18 @@ packages/core/
 ### Git Workflow
 
 ```bash
-# Make changes
+# Stage and commit your changes first
 git add <files>
+git commit -m "Your message"
+
+# Pull remote changes (rebase to keep history clean)
+git pull --rebase
 
 # Sync beads issues
 bd sync
 
-# Commit
-git commit -m "Your message"
-
-# After pull
-git pull --rebase
+# Push everything
+git push
 ```
 
 ## Spark SQL Formatter
@@ -234,6 +235,8 @@ npm run test:verbose
 **MANDATORY** before ending any work session:
 
 ```bash
+git add .
+git commit -m "Your message"
 git pull --rebase
 bd sync
 git push
