@@ -557,6 +557,145 @@ describe('Host detection for Fabric', () => {
 });
 
 // ============================================================================
+// Cleanup Handler Tests
+// ============================================================================
+
+describe('Cleanup handler management', () => {
+  /**
+   * Simulates the cleanup handler tracking system from content.js
+   */
+  function createCleanupHandlers() {
+    const handlers = {
+      observers: [],
+      intervals: [],
+      timeouts: [],
+    };
+    
+    function trackObserver(observer) {
+      handlers.observers.push(observer);
+      return observer;
+    }
+    
+    function trackInterval(intervalId) {
+      handlers.intervals.push(intervalId);
+      return intervalId;
+    }
+    
+    function trackTimeout(timeoutId) {
+      handlers.timeouts.push(timeoutId);
+      return timeoutId;
+    }
+    
+    function cleanup() {
+      const disconnected = [];
+      for (const observer of handlers.observers) {
+        if (observer.disconnect) {
+          observer.disconnect();
+          disconnected.push(observer);
+        }
+      }
+      handlers.observers.length = 0;
+      
+      const clearedIntervals = [...handlers.intervals];
+      handlers.intervals.length = 0;
+      
+      const clearedTimeouts = [...handlers.timeouts];
+      handlers.timeouts.length = 0;
+      
+      return { disconnected, clearedIntervals, clearedTimeouts };
+    }
+    
+    return { handlers, trackObserver, trackInterval, trackTimeout, cleanup };
+  }
+  
+  test('trackObserver adds observer to list', () => {
+    const { handlers, trackObserver } = createCleanupHandlers();
+    const mockObserver = { disconnect: () => {} };
+    
+    trackObserver(mockObserver);
+    
+    expect(handlers.observers.length).toBe(1);
+    expect(handlers.observers[0]).toBe(mockObserver);
+  });
+  
+  test('trackInterval adds interval ID to list', () => {
+    const { handlers, trackInterval } = createCleanupHandlers();
+    
+    trackInterval(123);
+    trackInterval(456);
+    
+    expect(handlers.intervals.length).toBe(2);
+    expect(handlers.intervals[0]).toBe(123);
+    expect(handlers.intervals[1]).toBe(456);
+  });
+  
+  test('trackTimeout adds timeout ID to list', () => {
+    const { handlers, trackTimeout } = createCleanupHandlers();
+    
+    trackTimeout(789);
+    
+    expect(handlers.timeouts.length).toBe(1);
+    expect(handlers.timeouts[0]).toBe(789);
+  });
+  
+  test('cleanup disconnects all observers', () => {
+    const { trackObserver, cleanup } = createCleanupHandlers();
+    let disconnectCalled = false;
+    const mockObserver = { 
+      disconnect: () => { disconnectCalled = true; } 
+    };
+    
+    trackObserver(mockObserver);
+    cleanup();
+    
+    expect(disconnectCalled).toBeTruthy();
+  });
+  
+  test('cleanup clears all handler arrays', () => {
+    const { handlers, trackObserver, trackInterval, trackTimeout, cleanup } = createCleanupHandlers();
+    
+    trackObserver({ disconnect: () => {} });
+    trackInterval(1);
+    trackTimeout(2);
+    
+    expect(handlers.observers.length).toBe(1);
+    expect(handlers.intervals.length).toBe(1);
+    expect(handlers.timeouts.length).toBe(1);
+    
+    cleanup();
+    
+    expect(handlers.observers.length).toBe(0);
+    expect(handlers.intervals.length).toBe(0);
+    expect(handlers.timeouts.length).toBe(0);
+  });
+  
+  test('cleanup returns info about cleared resources', () => {
+    const { trackObserver, trackInterval, trackTimeout, cleanup } = createCleanupHandlers();
+    const mockObserver = { disconnect: () => {} };
+    
+    trackObserver(mockObserver);
+    trackInterval(100);
+    trackInterval(200);
+    trackTimeout(300);
+    
+    const result = cleanup();
+    
+    expect(result.disconnected.length).toBe(1);
+    expect(result.clearedIntervals.length).toBe(2);
+    expect(result.clearedTimeouts.length).toBe(1);
+  });
+  
+  test('track functions return the value for chaining', () => {
+    const { trackObserver, trackInterval, trackTimeout } = createCleanupHandlers();
+    const mockObserver = { disconnect: () => {} };
+    
+    expect(trackObserver(mockObserver)).toBe(mockObserver);
+    expect(trackInterval(42)).toBe(42);
+    expect(trackTimeout(99)).toBe(99);
+  });
+});
+
+// ============================================================================
 // Run Tests
 // ============================================================================
 

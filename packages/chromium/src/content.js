@@ -39,6 +39,88 @@ if (typeof window !== 'undefined') {
   window.__fabric_format = { formatCell, investigateStorage };
 }
 
+// ============================================================================
+// Cleanup Management
+// ============================================================================
+
+/**
+ * Tracks active observers and intervals for proper cleanup on page unload.
+ * Prevents memory leaks when the iframe is destroyed and recreated.
+ */
+const cleanupHandlers = {
+  observers: [],
+  intervals: [],
+  timeouts: [],
+};
+
+/**
+ * Register a MutationObserver for cleanup on page unload.
+ * @param {MutationObserver} observer - The observer to track
+ * @returns {MutationObserver} The same observer for chaining
+ */
+function trackObserver(observer) {
+  cleanupHandlers.observers.push(observer);
+  return observer;
+}
+
+/**
+ * Register an interval for cleanup on page unload.
+ * @param {number} intervalId - The interval ID from setInterval
+ * @returns {number} The same interval ID for chaining
+ */
+function trackInterval(intervalId) {
+  cleanupHandlers.intervals.push(intervalId);
+  return intervalId;
+}
+
+/**
+ * Register a timeout for cleanup on page unload.
+ * @param {number} timeoutId - The timeout ID from setTimeout
+ * @returns {number} The same timeout ID for chaining
+ */
+function trackTimeout(timeoutId) {
+  cleanupHandlers.timeouts.push(timeoutId);
+  return timeoutId;
+}
+
+/**
+ * Clean up all tracked resources (observers, intervals, timeouts).
+ * Called automatically on page unload.
+ */
+function cleanup() {
+  log.debug('Cleaning up resources...');
+  
+  // Disconnect all observers
+  for (const observer of cleanupHandlers.observers) {
+    try {
+      observer.disconnect();
+    } catch (e) {
+      // Ignore errors during cleanup
+    }
+  }
+  cleanupHandlers.observers.length = 0;
+  
+  // Clear all intervals
+  for (const intervalId of cleanupHandlers.intervals) {
+    clearInterval(intervalId);
+  }
+  cleanupHandlers.intervals.length = 0;
+  
+  // Clear all timeouts
+  for (const timeoutId of cleanupHandlers.timeouts) {
+    clearTimeout(timeoutId);
+  }
+  cleanupHandlers.timeouts.length = 0;
+  
+  log.debug('Cleanup complete');
+}
+
+// Register cleanup on page unload
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', cleanup);
+  window.addEventListener('unload', cleanup);
+}
+
 /**
  * Investigate where Fabric stores notebook cell data
  */
@@ -1044,7 +1126,7 @@ function init() {
   });
 
   let lastActiveState = null;
-  setInterval(() => {
+  trackInterval(setInterval(() => {
     const button = document.getElementById('fabric-formatter-button');
     const active = isIframeActive();
     const editorCount = document.querySelectorAll('.monaco-editor').length;
@@ -1060,9 +1142,9 @@ function init() {
     } else if (!active && button) {
       button.remove();
     }
-  }, 500);
+  }, 500));
 
-  const observer = new MutationObserver((mutations) => {
+  const observer = trackObserver(new MutationObserver((mutations) => {
     const button = document.getElementById('fabric-formatter-button');
     const buttonIsValid = button && button.isConnected && button.offsetParent !== null;
     
@@ -1072,13 +1154,13 @@ function init() {
         // Check if status bar was just added
         const statusBar = findStatusBar();
         if (statusBar && !statusBar.querySelector('button[name="FormatCells"]')) {
-          setTimeout(() => {
+          trackTimeout(setTimeout(() => {
             createFloatingButton();
-          }, 50);
+          }, 50));
         }
       }
     }
-  });
+  }));
   
   observer.observe(document.body, {
     childList: true,
