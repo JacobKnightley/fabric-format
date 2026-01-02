@@ -37,7 +37,19 @@ function findSupportedFiles(dir: string): string[] {
     const files: string[] = [];
     
     function walk(currentDir: string) {
-        const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+        let entries;
+        try {
+            entries = fs.readdirSync(currentDir, { withFileTypes: true });
+        } catch (e: any) {
+            if (e.code === 'EACCES' || e.code === 'EPERM') {
+                console.error(`Error: Permission denied reading directory: ${currentDir}`);
+            } else if (e.code === 'ENOENT') {
+                console.error(`Error: Directory not found: ${currentDir}`);
+            } else {
+                console.error(`Error: Cannot read directory ${currentDir}: ${e.message}`);
+            }
+            process.exit(2);
+        }
         for (const entry of entries) {
             const fullPath = path.join(currentDir, entry.name);
             if (entry.isDirectory()) {
@@ -64,16 +76,23 @@ function findSupportedFiles(dir: string): string[] {
 function expandPaths(paths: string[]): string[] {
     const files: string[] = [];
     for (const p of paths) {
-        if (fs.existsSync(p)) {
-            const stat = fs.statSync(p);
-            if (stat.isDirectory()) {
-                files.push(...findSupportedFiles(p));
+        let stat;
+        try {
+            stat = fs.statSync(p);
+        } catch (e: any) {
+            if (e.code === 'ENOENT') {
+                console.error(`Error: File or directory not found: ${p}`);
+            } else if (e.code === 'EACCES' || e.code === 'EPERM') {
+                console.error(`Error: Permission denied accessing: ${p}`);
             } else {
-                files.push(p);
+                console.error(`Error: Cannot access ${p}: ${e.message}`);
             }
-        } else {
-            console.error(`Error: File or directory not found: ${p}`);
             process.exit(2);
+        }
+        if (stat.isDirectory()) {
+            files.push(...findSupportedFiles(p));
+        } else {
+            files.push(p);
         }
     }
     return files;
@@ -291,12 +310,36 @@ async function cmdFormat(args: string[]): Promise<void> {
             process.exit(2);
         }
         const file = paths[0];
-        const stat = fs.statSync(file);
+        let stat;
+        try {
+            stat = fs.statSync(file);
+        } catch (e: any) {
+            if (e.code === 'ENOENT') {
+                console.error(`Error: File not found: ${file}`);
+            } else if (e.code === 'EACCES' || e.code === 'EPERM') {
+                console.error(`Error: Permission denied accessing: ${file}`);
+            } else {
+                console.error(`Error: Cannot access ${file}: ${e.message}`);
+            }
+            process.exit(2);
+        }
         if (stat.isDirectory()) {
             console.error('Error: --print cannot be used with directories');
             process.exit(2);
         }
-        const content = fs.readFileSync(file, 'utf-8');
+        let content;
+        try {
+            content = fs.readFileSync(file, 'utf-8');
+        } catch (e: any) {
+            if (e.code === 'EACCES' || e.code === 'EPERM') {
+                console.error(`Error: Permission denied reading: ${file}`);
+            } else if (e.code === 'EBUSY') {
+                console.error(`Error: File is locked or busy: ${file}`);
+            } else {
+                console.error(`Error: Cannot read ${file}: ${e.message}`);
+            }
+            process.exit(2);
+        }
         const formatted = await formatFile(content, file);
         process.stdout.write(formatted);
         return;
@@ -312,19 +355,48 @@ async function cmdFormat(args: string[]): Promise<void> {
     // Format files in-place
     let formattedCount = 0;
     for (const file of files) {
+        let content;
         try {
-            const content = fs.readFileSync(file, 'utf-8');
-            const normalizedContent = normalizeLineEndings(content);
-            const formatted = await formatFile(normalizedContent, file);
-            
-            if (formatted !== normalizedContent) {
-                fs.writeFileSync(file, formatted, 'utf-8');
-                console.log(`Formatted ${file}`);
-                formattedCount++;
+            content = fs.readFileSync(file, 'utf-8');
+        } catch (e: any) {
+            if (e.code === 'EACCES' || e.code === 'EPERM') {
+                console.error(`Error: Permission denied reading: ${file}`);
+            } else if (e.code === 'ENOENT') {
+                console.error(`Error: File not found: ${file}`);
+            } else if (e.code === 'EBUSY') {
+                console.error(`Error: File is locked or busy: ${file}`);
+            } else {
+                console.error(`Error: Cannot read ${file}: ${e.message}`);
             }
+            process.exit(1);
+        }
+        
+        const normalizedContent = normalizeLineEndings(content);
+        let formatted;
+        try {
+            formatted = await formatFile(normalizedContent, file);
         } catch (e: any) {
             console.error(`Error formatting ${file}: ${e.message}`);
             process.exit(1);
+        }
+        
+        if (formatted !== normalizedContent) {
+            try {
+                fs.writeFileSync(file, formatted, 'utf-8');
+            } catch (e: any) {
+                if (e.code === 'EACCES' || e.code === 'EPERM') {
+                    console.error(`Error: Permission denied writing: ${file}`);
+                } else if (e.code === 'EBUSY') {
+                    console.error(`Error: File is locked or busy: ${file}`);
+                } else if (e.code === 'EROFS') {
+                    console.error(`Error: File system is read-only: ${file}`);
+                } else {
+                    console.error(`Error: Cannot write ${file}: ${e.message}`);
+                }
+                process.exit(1);
+            }
+            console.log(`Formatted ${file}`);
+            formattedCount++;
         }
     }
 
@@ -409,15 +481,33 @@ async function cmdCheck(args: string[]): Promise<void> {
     // Check mode: check without modifying
     let needsFormatting = false;
     for (const file of files) {
+        let content;
         try {
-            const content = fs.readFileSync(file, 'utf-8');
-            const formatted = await formatFile(content, file);
-            if (formatted !== content) {
-                console.log(file);
-                needsFormatting = true;
+            content = fs.readFileSync(file, 'utf-8');
+        } catch (e: any) {
+            if (e.code === 'EACCES' || e.code === 'EPERM') {
+                console.error(`Error: Permission denied reading: ${file}`);
+            } else if (e.code === 'ENOENT') {
+                console.error(`Error: File not found: ${file}`);
+            } else if (e.code === 'EBUSY') {
+                console.error(`Error: File is locked or busy: ${file}`);
+            } else {
+                console.error(`Error: Cannot read ${file}: ${e.message}`);
             }
+            process.exit(1);
+        }
+        
+        let formatted;
+        try {
+            formatted = await formatFile(content, file);
         } catch (e: any) {
             console.error(`Error checking ${file}: ${e.message}`);
+            process.exit(1);
+        }
+        
+        if (formatted !== content) {
+            console.log(file);
+            needsFormatting = true;
         }
     }
 
