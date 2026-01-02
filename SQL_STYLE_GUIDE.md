@@ -1,6 +1,6 @@
 # Spark SQL Style Guide
 
-The Spark SQL implementation of **fabric-format** is a custom Grammar based formatter.  Meanign the formatter understands the SQL, and formats it in a way consistent with how you think about the code. This guide explains *what* the formatter does so you know what to expect.
+The Spark SQL implementation of **fabric-format** is a custom Grammar based formatter. Meaning the formatter understands the SQL, and formats it in a way consistent with how you think about the code. This guide explains *what* the formatter does so you know what to expect.
 
 ---
 
