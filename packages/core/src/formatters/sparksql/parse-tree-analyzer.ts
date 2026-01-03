@@ -13,11 +13,8 @@
  * This is 100% grammar-driven - no hardcoded keyword lists.
  */
 
-// @ts-expect-error - Generated ANTLR code
 import SqlBaseLexer from './generated/SqlBaseLexer.js';
-// @ts-expect-error - Generated ANTLR code
 import SqlBaseParser from './generated/SqlBaseParser.js';
-// @ts-expect-error - Generated ANTLR code
 import SqlBaseParserVisitor from './generated/SqlBaseParserVisitor.js';
 
 import { getTokenType } from './token-utils.js';

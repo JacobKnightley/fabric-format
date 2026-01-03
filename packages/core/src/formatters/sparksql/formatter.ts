@@ -34,7 +34,6 @@ import {
   shouldExpandWindow,
 } from './formatting-context.js';
 import { SPARK_BUILTIN_FUNCTIONS } from './generated/builtinFunctions.js';
-// @ts-expect-error - Generated ANTLR code
 import SqlBaseParser from './generated/SqlBaseParser.js';
 import {
   formatHintContent,

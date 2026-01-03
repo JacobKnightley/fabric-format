@@ -9,7 +9,6 @@
  * - isKeywordToken(): Check if a token is a keyword (grammar-derived)
  */
 
-// @ts-expect-error - Generated ANTLR code
 import SqlBaseLexer from './generated/SqlBaseLexer.js';
 
 // ============================================================================
