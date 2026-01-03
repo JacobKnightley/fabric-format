@@ -81,7 +81,7 @@ function trackInterval(intervalId) {
  * @param {number} timeoutId - The timeout ID from setTimeout
  * @returns {number} The same timeout ID for chaining
  */
-function trackTimeout(timeoutId) {
+function _trackTimeout(timeoutId) {
   cleanupHandlers.timeouts.push(timeoutId);
   return timeoutId;
 }
@@ -122,6 +122,29 @@ function cleanup() {
 if (typeof window !== 'undefined') {
   window.addEventListener('beforeunload', cleanup);
   window.addEventListener('unload', cleanup);
+}
+
+// ============================================================================
+// Utilities
+// ============================================================================
+
+/**
+ * Simple debounce function to limit how often a function can be called.
+ * @param {Function} fn - The function to debounce
+ * @param {number} ms - The debounce delay in milliseconds
+ * @returns {Function} The debounced function
+ */
+function debounce(fn, ms) {
+  let timeoutId = null;
+  return function (...args) {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+    timeoutId = setTimeout(() => {
+      fn.apply(this, args);
+      timeoutId = null;
+    }, ms);
+  };
 }
 
 // State
@@ -193,11 +216,15 @@ async function initializeFormatters(maxRetries = 3, baseDelayMs = 500) {
 // ============================================================================
 
 /**
- * Detect the language/type of a Monaco editor cell
+ * Detect the language/type of a Monaco editor cell.
+ * Uses multiple fallback strategies for robustness against DOM changes.
+ * @param {Element} editor - The Monaco editor element
+ * @returns {string} The detected cell type or 'unknown'
  */
 function detectCellType(editor) {
   if (!editor) return 'unknown';
 
+  // Strategy 1: data-mode-id attribute (most reliable)
   const modeElement =
     editor.querySelector('[data-mode-id]') || editor.closest('[data-mode-id]');
   if (modeElement) {
@@ -206,6 +233,7 @@ function detectCellType(editor) {
     return mode;
   }
 
+  // Strategy 2: lang- class on editor
   const classList = editor.className || '';
   const langMatch = classList.match(/lang-(\w+)/);
   if (langMatch) {
@@ -213,7 +241,60 @@ function detectCellType(editor) {
     return langMatch[1];
   }
 
-  log.debug('detectCellType: could not determine type, returning unknown');
+  // Strategy 3: Look for language class patterns in child elements
+  const languageClasses = editor.querySelectorAll(
+    '[class*="language-"], [class*="mtk"]',
+  );
+  if (languageClasses.length > 0) {
+    for (const el of languageClasses) {
+      const classes = el.className || '';
+      const match = classes.match(/language-(\w+)/);
+      if (match) {
+        log.debug('detectCellType: found language- class =', match[1]);
+        return match[1];
+      }
+    }
+  }
+
+  // Strategy 4: Check parent cell container for language hints
+  const cellContainer = editor.closest('[data-cell-id]');
+  if (cellContainer) {
+    const cellClasses = cellContainer.className || '';
+    const cellLangMatch = cellClasses.match(
+      /cell-(python|sql|sparksql|pyspark|scala|r)/i,
+    );
+    if (cellLangMatch) {
+      log.debug(
+        'detectCellType: found cell container class =',
+        cellLangMatch[1],
+      );
+      return cellLangMatch[1];
+    }
+  }
+
+  // Strategy 5: Heuristic detection from content (last resort)
+  const codeContent =
+    editor.querySelector('.view-lines')?.textContent?.toLowerCase() || '';
+  if (
+    codeContent.includes('select ') ||
+    codeContent.includes('from ') ||
+    codeContent.includes('create ')
+  ) {
+    log.debug('detectCellType: heuristic detection suggests SQL');
+    return 'sparksql';
+  }
+  if (
+    codeContent.includes('def ') ||
+    codeContent.includes('import ') ||
+    codeContent.includes('class ')
+  ) {
+    log.debug('detectCellType: heuristic detection suggests Python');
+    return 'python';
+  }
+
+  log.warn(
+    'detectCellType: could not determine type using any strategy, returning unknown',
+  );
   return 'unknown';
 }
 
@@ -456,11 +537,48 @@ function findScrollContainer() {
 // Code Extraction & Insertion
 // ============================================================================
 
+/**
+ * Extract code from a Monaco editor element.
+ * Uses multiple fallback strategies for robustness against DOM structure changes.
+ * @param {Element} editorElement - The Monaco editor DOM element
+ * @returns {string} The extracted code
+ */
 function extractCodeFromEditor(editorElement) {
-  const lines = editorElement.querySelectorAll('.view-lines .view-line');
-  const codeLines = [];
+  // Strategy 1: Standard Monaco DOM structure (.view-lines .view-line)
+  let lines = editorElement.querySelectorAll('.view-lines .view-line');
 
+  // Strategy 2: Fallback for different Monaco versions (direct .view-line children)
+  if (lines.length === 0) {
+    lines = editorElement.querySelectorAll('.view-line');
+    if (lines.length > 0) {
+      log.debug('extractCodeFromEditor: using fallback selector .view-line');
+    }
+  }
+
+  // Strategy 3: Fallback for even newer Monaco (lines-content container)
+  if (lines.length === 0) {
+    lines = editorElement.querySelectorAll(
+      '[class*="lines-content"] [class*="view-line"]',
+    );
+    if (lines.length > 0) {
+      log.debug('extractCodeFromEditor: using fallback selector lines-content');
+    }
+  }
+
+  const codeLines = [];
   log.debug('extractCodeFromEditor: found', lines.length, 'view-lines');
+
+  if (lines.length === 0) {
+    // Last resort: try to get any text content from the editor
+    log.warn(
+      'extractCodeFromEditor: no view-lines found, using innerText fallback',
+    );
+    const inputArea = editorElement.querySelector('.inputarea');
+    if (inputArea) {
+      return inputArea.textContent?.replace(/\u00a0/g, ' ') || '';
+    }
+    return editorElement.innerText?.replace(/\u00a0/g, ' ') || '';
+  }
 
   const sortedLines = Array.from(lines).sort((a, b) => {
     const topA = parseFloat(a.style.top) || 0;
@@ -1183,30 +1301,27 @@ function init() {
     }, 500),
   );
 
-  const observer = trackObserver(
-    new MutationObserver((_mutations) => {
-      const button = document.getElementById('fabric-formatter-button');
-      const buttonIsValid = button?.isConnected && button.offsetParent !== null;
+  // Debounced handler for mutation observer - prevents excessive DOM queries
+  const handleMutations = debounce(() => {
+    const button = document.getElementById('fabric-formatter-button');
+    const buttonIsValid = button?.isConnected && button.offsetParent !== null;
 
-      if (!buttonIsValid && isIframeActive()) {
-        const editorCount = document.querySelectorAll('.monaco-editor').length;
-        if (editorCount > 0) {
-          // Check if status bar was just added
-          const statusBar = findStatusBar();
-          if (
-            statusBar &&
-            !statusBar.querySelector('button[name="FormatCells"]')
-          ) {
-            trackTimeout(
-              setTimeout(() => {
-                createFloatingButton();
-              }, 50),
-            );
-          }
+    if (!buttonIsValid && isIframeActive()) {
+      const editorCount = document.querySelectorAll('.monaco-editor').length;
+      if (editorCount > 0) {
+        // Check if status bar was just added
+        const statusBar = findStatusBar();
+        if (
+          statusBar &&
+          !statusBar.querySelector('button[name="FormatCells"]')
+        ) {
+          createFloatingButton();
         }
       }
-    }),
-  );
+    }
+  }, 250); // 250ms debounce delay
+
+  const observer = trackObserver(new MutationObserver(handleMutations));
 
   observer.observe(document.body, {
     childList: true,
