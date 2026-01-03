@@ -29,8 +29,6 @@ export class SqlFormatter implements LanguageFormatter {
 
   format(code: string, _options?: FormatterOptions): FormatResult {
     try {
-      // Note: formatSql currently only takes one argument
-      // TODO: Add options support to formatSql in the future
       const formatted = formatSql(code);
 
       const changed = formatted !== code;

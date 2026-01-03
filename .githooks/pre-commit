@@ -1,0 +1,16 @@
+#!/bin/sh
+# Pre-commit hook for fabric-format
+# Runs biome check and tests before allowing commit
+
+echo "Running pre-commit checks..."
+
+# Run biome check (lint + format)
+echo "→ Checking code with Biome..."
+npx biome check --staged --no-errors-on-unmatched
+if [ $? -ne 0 ]; then
+    echo "❌ Biome check failed. Fix issues with: npm run lint:fix"
+    exit 1
+fi
+
+echo "✓ Pre-commit checks passed"
+exit 0

@@ -39,7 +39,7 @@ const log = {
 
 // Expose for testing (will be accessible via window.__fabric_format)
 if (typeof window !== 'undefined') {
-  window.__fabric_format = { formatCell, investigateStorage };
+  window.__fabric_format = { formatCell };
 }
 
 // ============================================================================
@@ -122,144 +122,6 @@ function cleanup() {
 if (typeof window !== 'undefined') {
   window.addEventListener('beforeunload', cleanup);
   window.addEventListener('unload', cleanup);
-}
-
-/**
- * Investigate where Fabric stores notebook cell data
- */
-async function investigateStorage() {
-  console.log('=== Storage Investigation ===');
-
-  // Get cell IDs from DOM for comparison
-  const cellIds = Array.from(document.querySelectorAll('[data-cell-id]')).map(
-    (el) => el.getAttribute('data-cell-id'),
-  );
-  console.log('Cell IDs in DOM:', cellIds);
-
-  // 1. Check localStorage - look for cell IDs or notebook patterns
-  console.log('\n--- localStorage ---');
-  console.log('Total keys:', Object.keys(localStorage).length);
-
-  const notebookPatterns = [
-    'notebook',
-    'cell',
-    'source',
-    'content',
-    'model',
-    'editor',
-  ];
-  const matchingKeys = [];
-
-  for (const key of Object.keys(localStorage)) {
-    const keyLower = key.toLowerCase();
-    const value = localStorage.getItem(key);
-
-    // Check if key matches any cell ID
-    if (cellIds.some((id) => key.includes(id))) {
-      console.log(`CELL ID MATCH: ${key}`, value?.substring(0, 300));
-      matchingKeys.push(key);
-      continue;
-    }
-
-    // Check if key contains notebook patterns
-    if (notebookPatterns.some((p) => keyLower.includes(p))) {
-      console.log(`PATTERN MATCH (${key}):`, value?.substring(0, 300));
-      matchingKeys.push(key);
-      continue;
-    }
-
-    // Check if value contains actual code
-    if (
-      value?.includes('SELECT') ||
-      value?.includes('spark.') ||
-      value?.includes('def ') ||
-      value?.includes('import ')
-    ) {
-      // Skip if it looks like chat history
-      if (!value.includes('"role"')) {
-        console.log(`CODE MATCH: ${key}`, value?.substring(0, 300));
-        matchingKeys.push(key);
-      }
-    }
-  }
-
-  // 2. Check IndexedDB more thoroughly
-  console.log('\n--- IndexedDB Deep Dive ---');
-  if (indexedDB.databases) {
-    const dbs = await indexedDB.databases();
-    console.log(
-      'Databases:',
-      dbs.map((d) => d.name),
-    );
-
-    for (const dbInfo of dbs) {
-      if (dbInfo.name === 'workbox-expiration') continue; // Skip service worker cache
-
-      console.log(`\nExploring: ${dbInfo.name}`);
-      try {
-        const db = await new Promise((resolve, reject) => {
-          const req = indexedDB.open(dbInfo.name);
-          req.onsuccess = () => resolve(req.result);
-          req.onerror = () => reject(req.error);
-        });
-
-        for (const storeName of db.objectStoreNames) {
-          const tx = db.transaction(storeName, 'readonly');
-          const store = tx.objectStore(storeName);
-
-          const allRecords = await new Promise((r) => {
-            const req = store.getAll();
-            req.onsuccess = () => r(req.result);
-          });
-
-          console.log(`  ${storeName}: ${allRecords.length} records`);
-
-          for (const record of allRecords) {
-            const str = JSON.stringify(record);
-            if (cellIds.some((id) => str.includes(id))) {
-              console.log(`  CELL ID in ${storeName}:`, str.substring(0, 500));
-            }
-          }
-        }
-        db.close();
-      } catch (e) {
-        console.log(`  Error: ${e.message}`);
-      }
-    }
-  }
-
-  // 3. Look for Monaco model registry
-  console.log('\n--- Monaco Models ---');
-  try {
-    // Monaco stores models globally
-    if (window.monaco?.editor) {
-      const models = window.monaco.editor.getModels();
-      console.log('Monaco models:', models.length);
-      for (const model of models) {
-        console.log(`  URI: ${model.uri.toString()}`);
-        console.log(`  Content preview: ${model.getValue().substring(0, 200)}`);
-      }
-    } else {
-      console.log('window.monaco not accessible (isolated world)');
-    }
-  } catch (e) {
-    console.log('Monaco access error:', e.message);
-  }
-
-  // 4. Check for React state or other frameworks
-  console.log('\n--- Framework Detection ---');
-  const rootEl =
-    document.getElementById('root') ||
-    document.querySelector('[data-reactroot]');
-  if (rootEl) {
-    const reactKey = Object.keys(rootEl).find(
-      (k) =>
-        k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance'),
-    );
-    console.log('React detected:', !!reactKey);
-  }
-
-  console.log('\n=== Investigation Complete ===');
 }
 
 // State
@@ -1219,9 +1081,6 @@ function init() {
           attempt,
         );
         log.debug('✓ WINNER frame details:', getFrameDetails());
-
-        // Run storage investigation
-        await investigateStorage();
 
         const success = await waitForStatusBarAndInject();
         log.info('Ready - button injected:', success);

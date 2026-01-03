@@ -19,7 +19,7 @@
     "notebook",
     "edge-extension"
   ],
-  "author": "",
+  "author": "Jacob Knightley",
   "license": "MIT",
   "dependencies": {
     "@jacobknightley/fabric-format": "*"

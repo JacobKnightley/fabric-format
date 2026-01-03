@@ -5,6 +5,7 @@
     "packages/*"
   ],
   "scripts": {
+    "prepare": "git config core.hooksPath .githooks || true",
     "build": "npm run build -w @jacobknightley/fabric-format && npm run build -w fabric-format-chromium",
     "build:core": "npm run build -w @jacobknightley/fabric-format",
     "build:chromium": "npm run build -w fabric-format-chromium",
