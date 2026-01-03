@@ -11,6 +11,12 @@
  * - And many more context-specific positions
  *
  * This is 100% grammar-driven - no hardcoded keyword lists.
+ *
+ * NOTE: This file intentionally exceeds the 200-400 line guideline (~1800 lines).
+ * The ANTLR visitor pattern requires all visit methods to be in one class, and the
+ * private helper methods mutate class state (Sets/Maps). Extracting them would require
+ * passing all state as parameters, which is invasive. See fabric-format-3e5 for
+ * discussion of alternative approaches (composition, multiple analyzer classes).
  */
 
 import SqlBaseLexer from './generated/SqlBaseLexer.js';
