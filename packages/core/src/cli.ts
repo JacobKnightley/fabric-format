@@ -457,6 +457,9 @@ async function cmdFormat(args: string[], ctx: CliContext): Promise<void> {
     return;
   }
 
+  // Initialize Python formatter once before processing files
+  await initializePythonFormatter();
+
   // Format files in-place
   let formattedCount = 0;
   for (const file of files) {
@@ -588,6 +591,9 @@ async function cmdCheck(args: string[], ctx: CliContext): Promise<void> {
     ctx.stdout('No supported files found\n');
     return;
   }
+
+  // Initialize Python formatter once before processing files
+  await initializePythonFormatter();
 
   // Check mode: check without modifying
   let needsFormatting = false;
