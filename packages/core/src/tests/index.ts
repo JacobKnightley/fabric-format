@@ -164,13 +164,19 @@ async function main(): Promise<void> {
   const results: SuiteResult[] = [];
   const verbose =
     process.argv.includes('--verbose') || process.argv.includes('-v');
+  const timing = process.argv.includes('--timing');
 
   // Run Spark SQL tests (sync)
+  const sqlStart = performance.now();
   for (const suite of sparkSqlSuites) {
     const result = runSuite(suite, formatSql);
     results.push(result);
     printSuiteResult(result, verbose);
   }
+  if (timing)
+    console.log(
+      `  ⏱ Spark SQL tests: ${(performance.now() - sqlStart).toFixed(0)}ms`,
+    );
 
   // Run magic SQL suite with its custom runner
   const magicResult = runMagicSqlSuite();
@@ -204,9 +210,15 @@ async function main(): Promise<void> {
   console.log('='.repeat(50));
 
   // Initialize Python formatter for tests
+  const pythonInitStart = performance.now();
   await initializePythonFormatter();
+  if (timing)
+    console.log(
+      `  ⏱ Python init: ${(performance.now() - pythonInitStart).toFixed(0)}ms`,
+    );
 
   // Run Python sync tests
+  const pythonTestStart = performance.now();
   for (const suite of pythonSyncSuites) {
     const result = runSuite(suite, (code) => {
       const res = formatCell(code, 'python');
@@ -224,6 +236,10 @@ async function main(): Promise<void> {
   const notebookResult = await runNotebookIntegrationTests();
   results.push(notebookResult);
   printSuiteResult(notebookResult, verbose);
+  if (timing)
+    console.log(
+      `  ⏱ Python tests: ${(performance.now() - pythonTestStart).toFixed(0)}ms`,
+    );
 
   // Integration tests header
   console.log(`\n${'='.repeat(50)}`);
@@ -231,6 +247,7 @@ async function main(): Promise<void> {
   console.log('='.repeat(50));
 
   // Run error context tests
+  const integrationStart = performance.now();
   const errorContextResult = await runErrorContextTests();
   results.push(errorContextResult);
   printSuiteResult(errorContextResult, verbose);
@@ -252,9 +269,18 @@ async function main(): Promise<void> {
   printSuiteResult(parsingResult, verbose);
 
   // Run CLI tests
+  const cliStart = performance.now();
   const cliResult = await runCliTests();
+  if (timing)
+    console.log(
+      `  ⏱ CLI tests: ${(performance.now() - cliStart).toFixed(0)}ms`,
+    );
   results.push(cliResult);
   printSuiteResult(cliResult, verbose);
+  if (timing)
+    console.log(
+      `  ⏱ Integration tests total: ${(performance.now() - integrationStart).toFixed(0)}ms`,
+    );
 
   const { totalFailed } = printSummary(results);
 
