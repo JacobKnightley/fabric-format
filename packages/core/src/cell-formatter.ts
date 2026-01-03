@@ -20,7 +20,11 @@
  * ```
  */
 
-import { getFormatterRegistry } from './formatters/index.js';
+import {
+  formatErrorWithContext,
+  getFormatterRegistry,
+  type FormattingContext,
+} from './formatters/index.js';
 import {
   getPythonFormatter,
   resetPythonFormatter,
@@ -148,6 +152,7 @@ export function resetPythonFormatterState(): void {
  *
  * @param content Raw cell content (no comment wrappers like `# MAGIC`)
  * @param cellType The cell type from metadata (e.g., 'sparksql', 'python', 'pyspark')
+ * @param context Optional context for enriching error messages (cell index, file path)
  * @returns Formatted content and status
  *
  * @example
@@ -160,13 +165,22 @@ export function resetPythonFormatterState(): void {
  * await initializePythonFormatter();
  * const result = formatCell('x=1', 'python');
  * console.log(result.formatted); // 'x = 1'
+ *
+ * // With context for better error messages
+ * const result = formatCell(code, 'python', { cellIndex: 5, filePath: 'notebook.py' });
+ * // On error: "Format error in cell 5 of notebook.py: syntax error"
  * ```
  */
 export function formatCell(
   content: string,
   cellType: CellType,
+  context?: FormattingContext,
 ): FormatCellResult {
   const type = cellType.toLowerCase() as CellType;
+  // Enrich context with language info
+  const enrichedContext: FormattingContext | undefined = context
+    ? { ...context, language: type }
+    : undefined;
 
   switch (type) {
     case 'sparksql':
@@ -177,10 +191,11 @@ export function formatCell(
           changed: formatted !== content,
         };
       } catch (error) {
+        const baseError = `Spark SQL format error: ${error}`;
         return {
           formatted: content,
           changed: false,
-          error: `Spark SQL format error: ${error}`,
+          error: formatErrorWithContext(baseError, enrichedContext),
         };
       }
 
@@ -190,11 +205,12 @@ export function formatCell(
       const pythonFormatter = registry.get('python');
 
       if (!pythonFormatter?.isReady()) {
+        const baseError =
+          'Python formatter not initialized. Call initializePythonFormatter() first.';
         return {
           formatted: content,
           changed: false,
-          error:
-            'Python formatter not initialized. Call initializePythonFormatter() first.',
+          error: formatErrorWithContext(baseError, enrichedContext),
         };
       }
 
@@ -205,7 +221,9 @@ export function formatCell(
       return {
         formatted: result.formatted,
         changed: result.changed,
-        error: result.error,
+        error: result.error
+          ? formatErrorWithContext(result.error, enrichedContext)
+          : undefined,
       };
     }
 
@@ -221,12 +239,17 @@ export function formatCell(
 /**
  * Synchronous version of formatCell for Spark SQL only.
  * Use this when you only need SQL formatting and don't want async.
+ *
+ * @param content Raw cell content
+ * @param cellType The cell type (must be 'sparksql')
+ * @param context Optional context for enriching error messages
  */
 export function formatCellSync(
   content: string,
   cellType: 'sparksql',
+  context?: FormattingContext,
 ): FormatCellResult {
-  return formatCell(content, cellType);
+  return formatCell(content, cellType, context);
 }
 
 /**
@@ -237,6 +260,7 @@ export function formatCellSync(
  *
  * @param content Raw cell content
  * @param cellType The cell type from metadata
+ * @param context Optional context for enriching error messages
  * @returns Promise resolving to formatted content and status
  *
  * @example
@@ -250,8 +274,13 @@ export function formatCellSync(
 export async function formatCellAsync(
   content: string,
   cellType: CellType,
+  context?: FormattingContext,
 ): Promise<FormatCellResult> {
   const type = cellType.toLowerCase() as CellType;
+  // Enrich context with language info
+  const enrichedContext: FormattingContext | undefined = context
+    ? { ...context, language: type }
+    : undefined;
 
   // For Python/PySpark, wait for initialization if in progress
   if (type === 'python' || type === 'pyspark') {
@@ -259,14 +288,15 @@ export async function formatCellAsync(
       try {
         await pythonFormatterInitPromise;
       } catch (error) {
+        const baseError = `Python formatter initialization failed: ${error}`;
         return {
           formatted: content,
           changed: false,
-          error: `Python formatter initialization failed: ${error}`,
+          error: formatErrorWithContext(baseError, enrichedContext),
         };
       }
     }
   }
 
-  return formatCell(content, cellType);
+  return formatCell(content, cellType, context);
 }

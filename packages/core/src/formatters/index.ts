@@ -23,8 +23,11 @@ export type {
   FormatterConfig,
   FormatterOptions,
   FormatterRegistry,
+  FormattingContext,
   LanguageFormatter,
 } from './types.js';
+
+export { formatContextLocation, formatErrorWithContext } from './types.js';
 
 /**
  * Default formatter registry implementation.

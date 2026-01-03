@@ -126,6 +126,7 @@ async function formatFile(content: string, filePath: string): Promise<string> {
   const { content: formatted } = await formatNotebook(content, ext, {
     formatPython: true,
     formatSql: true,
+    filePath, // Pass file path for error context
   });
   return formatted;
 }

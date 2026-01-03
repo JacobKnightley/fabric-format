@@ -618,10 +618,13 @@ export async function formatNotebook(
     formatSql?: boolean;
     formatPython?: boolean;
     configPath?: string;
+    /** File path for error context (optional) */
+    filePath?: string;
   },
 ): Promise<{ content: string; stats: FormatStats }> {
   const formatSparkSqlCells = options?.formatSql ?? true;
   const formatPythonCells = options?.formatPython ?? true;
+  const filePath = options?.filePath;
 
   const stats: FormatStats = {
     sparkSqlCellsFormatted: 0,
@@ -650,10 +653,21 @@ export async function formatNotebook(
   }
 
   // Process cells in reverse order (to preserve line numbers)
+  // Keep track of original indices for error context
   let result = content;
-  const cellsReversed = [...notebook.cells].reverse();
+  const totalCells = notebook.cells.length;
 
-  for (const cell of cellsReversed) {
+  for (let reverseIdx = 0; reverseIdx < totalCells; reverseIdx++) {
+    const originalIdx = totalCells - 1 - reverseIdx;
+    const cell = notebook.cells[originalIdx];
+
+    // Create context for error messages (1-based cell index for user-friendliness)
+    const context = {
+      cellIndex: originalIdx + 1,
+      filePath,
+      language: cell.language,
+    };
+
     // Determine if this cell should be formatted based on language and magic command
     // Spark SQL cells: format only if %%sql magic or no magic command
     // Python cells: format only if %%pyspark magic or no magic command
@@ -671,7 +685,7 @@ export async function formatNotebook(
 
     if (shouldFormatSparkSql) {
       // Format using low-level API (cell.content is already stripped of MAGIC prefixes)
-      const formatResult = formatCell(cell.content, 'sparksql');
+      const formatResult = formatCell(cell.content, 'sparksql', context);
 
       if (formatResult.changed) {
         // replaceCell will add back MAGIC prefixes if needed
@@ -689,7 +703,7 @@ export async function formatNotebook(
       }
     } else if (shouldFormatPython) {
       // Format using low-level API (cell.content is already stripped of MAGIC prefixes)
-      const formatResult = formatCell(cell.content, 'python');
+      const formatResult = formatCell(cell.content, 'python', context);
 
       if (formatResult.changed) {
         // replaceCell will add back MAGIC prefixes if needed

@@ -7,6 +7,7 @@
 import {
   formatCell,
   initializePythonFormatter,
+  formatErrorWithContext,
 } from '@jacobknightley/fabric-format';
 
 // ============================================================================
@@ -786,6 +787,15 @@ async function _formatCurrentCell() {
     return;
   }
 
+  // Determine cell index for error context
+  const cellContainer = cell.closest('.nteract-cell-container[data-cell-id]');
+  const allCells = document.querySelectorAll(
+    '.nteract-cell-container[data-cell-id]',
+  );
+  const cellIndex = cellContainer
+    ? Array.from(allCells).indexOf(cellContainer) + 1
+    : undefined;
+
   log.debug(
     'formatCurrentCell - code length:',
     originalCode.length,
@@ -794,7 +804,10 @@ async function _formatCurrentCell() {
   );
   log.debug('formatCurrentCell - originalCode:', JSON.stringify(originalCode));
 
-  const result = formatCell(originalCode, language);
+  // Create context for error messages
+  const context = { cellIndex, language };
+
+  const result = formatCell(originalCode, language, context);
 
   log.debug('formatCurrentCell - result:', {
     changed: result.changed,
@@ -851,6 +864,7 @@ async function formatAllCells() {
   let alreadyFormatted = 0;
   let failed = 0;
   let _skipped = 0;
+  const failedCells = []; // Track which cells failed for user feedback
 
   // Single pass: scroll to each cell, extract, format, apply
   for (let i = 0; i < cellContainers.length; i++) {
@@ -911,11 +925,15 @@ async function formatAllCells() {
       continue;
     }
 
-    // Format
-    const result = formatCell(originalCode, language);
+    // Create context for error messages (1-based cell index)
+    const context = { cellIndex: i + 1, language };
+
+    // Format with context
+    const result = formatCell(originalCode, language, context);
 
     if (result.error) {
-      log.warn('Format error on cell', i, ':', result.error);
+      log.warn(`Format error on cell ${i + 1}:`, result.error);
+      failedCells.push(i + 1);
       failed++;
       continue;
     }
@@ -930,6 +948,7 @@ async function formatAllCells() {
     if (success) {
       formatted++;
     } else {
+      failedCells.push(i + 1);
       failed++;
     }
 
@@ -947,11 +966,17 @@ async function formatAllCells() {
   // Small delay to let scroll settle before showing notification
   await new Promise((r) => setTimeout(r, 100));
 
-  // Show summary
+  // Show summary with failed cell numbers if any
   const parts = [];
   if (formatted > 0) parts.push(`${formatted} formatted`);
   if (alreadyFormatted > 0) parts.push(`${alreadyFormatted} already clean`);
-  if (failed > 0) parts.push(`${failed} failed`);
+  if (failed > 0) {
+    const cellList =
+      failedCells.length <= 3
+        ? failedCells.join(', ')
+        : `${failedCells.slice(0, 3).join(', ')}...`;
+    parts.push(`${failed} failed (cells: ${cellList})`);
+  }
 
   const message = parts.join(', ') || 'No changes needed';
   const type = failed > 0 ? 'warning' : 'success';

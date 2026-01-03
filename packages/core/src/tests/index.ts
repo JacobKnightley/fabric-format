@@ -13,7 +13,11 @@ import {
   type SuiteResult,
 } from './framework.js';
 // Import integration test suites
-import { runCliTests, runNotebookParsingTests } from './integration/index.js';
+import {
+  runCliTests,
+  runErrorContextTests,
+  runNotebookParsingTests,
+} from './integration/index.js';
 // Import Python test suites
 import {
   basicFormattingTests,
@@ -224,6 +228,11 @@ async function main(): Promise<void> {
   console.log(`\n${'='.repeat(50)}`);
   console.log('Integration Test Suite');
   console.log('='.repeat(50));
+
+  // Run error context tests
+  const errorContextResult = await runErrorContextTests();
+  results.push(errorContextResult);
+  printSuiteResult(errorContextResult, verbose);
 
   // Run notebook parsing tests
   const parsingResult = await runNotebookParsingTests();
