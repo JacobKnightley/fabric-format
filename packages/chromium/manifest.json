@@ -3,33 +3,51 @@
   "name": "Fabric Format",
   "version": "0.0.6",
   "description": "Format Python and SparkSQL cells in Microsoft Fabric Notebooks",
+  "permissions": ["clipboardWrite"],
   "host_permissions": [
-    "https://*.fabric.microsoft.com/*",
-    "https://*.powerbi.com/*"
+    "https://app.fabric.microsoft.com/*",
+    "https://app.powerbi.com/*",
+    "https://pbides.powerbi.com/*"
   ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "action": {
-    "default_title": "Fabric Formatter"
+    "default_title": "Fabric Formatter",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png"
+    }
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },
   "web_accessible_resources": [
     {
       "resources": ["dist/ruff_wasm_bg.wasm"],
-      "matches": ["https://*.fabric.microsoft.com/*", "https://*.powerbi.com/*"]
+      "matches": [
+        "https://app.fabric.microsoft.com/*",
+        "https://app.powerbi.com/*",
+        "https://pbides.powerbi.com/*"
+      ]
     }
   ],
   "content_scripts": [
     {
-      "matches": ["https://*.fabric.microsoft.com/*"],
+      "matches": ["https://app.fabric.microsoft.com/*"],
       "include_globs": ["*synapsenotebooks*"],
       "js": ["dist/content.js"],
       "run_at": "document_idle",
       "all_frames": false
     },
     {
-      "matches": ["https://*.powerbi.com/*"],
-      "include_globs": ["*pbides.powerbi.com*"],
+      "matches": ["https://app.powerbi.com/*", "https://pbides.powerbi.com/*"],
+      "include_globs": ["*pbides.powerbi.com*", "*app.powerbi.com*"],
       "js": ["dist/content.js"],
       "run_at": "document_idle",
-      "all_frames": true
+      "all_frames": false
     }
   ]
 }
