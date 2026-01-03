@@ -98,18 +98,3 @@ export {
   hasCollapseDirective,
   hasFormatOff,
 } from './formatters/sparksql/index.js';
-
-// ============================================================================
-// Types (for library consumers)
-// ============================================================================
-
-export type {
-  AnalyzerResult,
-  ExpandedFunction,
-  ExpandedWindow,
-  FormattingState,
-  MultiArgFunctionInfo,
-  PendingComment,
-  TokenContext,
-  WindowDefInfo,
-} from './formatters/sparksql/types.js';
