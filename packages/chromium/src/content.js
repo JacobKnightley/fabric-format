@@ -126,6 +126,7 @@ if (typeof window !== 'undefined') {
 
 // State
 let pythonInitialized = false;
+let initializationFailed = false;
 let lastActiveEditor = null;
 
 // ============================================================================
@@ -133,24 +134,58 @@ let lastActiveEditor = null;
 // ============================================================================
 
 /**
- * Initialize the Python formatter with WASM loaded from extension resources
+ * Initialize the Python formatter with WASM loaded from extension resources.
+ * Implements retry logic with exponential backoff for transient failures.
+ * @param {number} maxRetries - Maximum number of retry attempts (default: 3)
+ * @param {number} baseDelayMs - Initial delay between retries in ms (default: 500)
+ * @returns {Promise<boolean>} True if initialization succeeded
  */
-async function initializeFormatters() {
+async function initializeFormatters(maxRetries = 3, baseDelayMs = 500) {
   if (pythonInitialized) return true;
-
-  try {
-    // Get the WASM URL from extension resources
-    const wasmUrl = chrome.runtime.getURL('dist/ruff_wasm_bg.wasm');
-    log.debug('WASM URL:', wasmUrl);
-
-    await initializePythonFormatter({ wasmUrl });
-    pythonInitialized = true;
-    log.info('Formatters initialized successfully');
-    return true;
-  } catch (error) {
-    log.error('Failed to initialize formatters:', error);
+  if (initializationFailed) {
+    // Already failed permanently, don't retry
     return false;
   }
+
+  const wasmUrl = chrome.runtime.getURL('dist/ruff_wasm_bg.wasm');
+  log.debug('WASM URL:', wasmUrl);
+
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      log.debug(`Initialization attempt ${attempt}/${maxRetries}`);
+      await initializePythonFormatter({ wasmUrl });
+      pythonInitialized = true;
+      log.info('Formatters initialized successfully');
+      return true;
+    } catch (error) {
+      lastError = error;
+      log.warn(
+        `Initialization attempt ${attempt} failed:`,
+        error.message || error,
+      );
+
+      if (attempt < maxRetries) {
+        const delay = baseDelayMs * 2 ** (attempt - 1); // Exponential backoff
+        log.debug(`Retrying in ${delay}ms...`);
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+  }
+
+  // All retries exhausted
+  initializationFailed = true;
+  log.error(
+    'Failed to initialize formatters after',
+    maxRetries,
+    'attempts:',
+    lastError,
+  );
+  showNotification(
+    `Failed to initialize formatter: ${lastError?.message || 'Unknown error'}. Reload the page to retry.`,
+    'error',
+  );
+  return false;
 }
 
 // ============================================================================
@@ -639,7 +674,11 @@ async function _formatCurrentCell() {
 
   // Ensure formatters are initialized
   if (!pythonInitialized) {
-    await initializeFormatters();
+    const initialized = await initializeFormatters();
+    if (!initialized) {
+      // Error notification already shown by initializeFormatters
+      return;
+    }
   }
 
   const originalCode = extractCodeFromEditor(cell);
@@ -702,7 +741,12 @@ async function formatAllCells() {
   showOverlay('Initializing...');
 
   // Initialize formatters
-  await initializeFormatters();
+  const initialized = await initializeFormatters();
+  if (!initialized) {
+    hideOverlay();
+    // Error notification already shown by initializeFormatters
+    return;
+  }
 
   // Get all cell containers
   const cellContainers = document.querySelectorAll(
