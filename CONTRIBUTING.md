@@ -42,7 +42,16 @@ npm test               # Run all tests (core + chromium)
 npm run test:core      # Run core library tests only
 npm run test:chromium  # Run extension tests only
 npm run test:verbose   # With failure details
+npm run test:coverage  # Run tests with code coverage report
 ```
+
+### Code Coverage
+
+Run `npm run test:coverage` to generate a coverage report. This outputs:
+- **Terminal:** Summary table with line/branch/function coverage
+- **HTML report:** `packages/core/coverage/index.html` (open in browser)
+
+Current coverage target: **80%+ lines** (we're at ~90%).
 
 ### Testing the Chromium Extension
 

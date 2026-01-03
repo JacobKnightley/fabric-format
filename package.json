@@ -12,6 +12,7 @@
     "test": "npm run test -w @jacobknightley/fabric-format && npm run test -w fabric-format-chromium",
     "test:core": "npm run test -w @jacobknightley/fabric-format",
     "test:chromium": "npm run test -w fabric-format-chromium",
+    "test:coverage": "npm run test:coverage -w @jacobknightley/fabric-format",
     "package:chromium": "npm run package -w fabric-format-chromium",
     "release": "node scripts/release.js",
     "lint": "biome check .",
