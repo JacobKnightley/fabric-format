@@ -1,49 +1,55 @@
 /**
  * Formatter Registry
- * 
+ *
  * Central registry for all language formatters.
  * Provides a unified interface for formatting any supported language.
  */
 
-import type { LanguageFormatter, FormatterRegistry } from './types.js';
-import { SqlFormatter, getSqlFormatter, isSqlCode } from './sparksql/index.js';
-import { PythonFormatter, getPythonFormatter, isPythonCode } from './python/index.js';
+import { getPythonFormatter, isPythonCode } from './python/index.js';
+import { getSqlFormatter, isSqlCode } from './sparksql/index.js';
+import type { FormatterRegistry, LanguageFormatter } from './types.js';
 
-// Re-export types
-export type { 
-    LanguageFormatter, 
-    FormatterOptions, 
-    FormatResult, 
-    FormatterConfig,
-    FormatterRegistry 
-} from './types.js';
+export {
+  getPythonFormatter,
+  isPythonCode,
+  PythonFormatter,
+} from './python/index.js';
 
 // Re-export formatters
-export { SqlFormatter, getSqlFormatter, isSqlCode } from './sparksql/index.js';
-export { PythonFormatter, getPythonFormatter, isPythonCode } from './python/index.js';
+export { getSqlFormatter, isSqlCode, SqlFormatter } from './sparksql/index.js';
+// Re-export types
+export type {
+  FormatResult,
+  FormatterConfig,
+  FormatterOptions,
+  FormatterRegistry,
+  LanguageFormatter,
+} from './types.js';
 
 /**
  * Default formatter registry implementation.
  */
 class DefaultFormatterRegistry implements FormatterRegistry {
-    private formatters: Map<string, LanguageFormatter> = new Map();
-    
-    get(language: string): LanguageFormatter | undefined {
-        return this.formatters.get(language.toLowerCase());
-    }
-    
-    register(formatter: LanguageFormatter): void {
-        this.formatters.set(formatter.language.toLowerCase(), formatter);
-    }
-    
-    languages(): string[] {
-        return Array.from(this.formatters.keys());
-    }
-    
-    async initializeAll(): Promise<void> {
-        const promises = Array.from(this.formatters.values()).map(f => f.initialize());
-        await Promise.all(promises);
-    }
+  private formatters: Map<string, LanguageFormatter> = new Map();
+
+  get(language: string): LanguageFormatter | undefined {
+    return this.formatters.get(language.toLowerCase());
+  }
+
+  register(formatter: LanguageFormatter): void {
+    this.formatters.set(formatter.language.toLowerCase(), formatter);
+  }
+
+  languages(): string[] {
+    return Array.from(this.formatters.keys());
+  }
+
+  async initializeAll(): Promise<void> {
+    const promises = Array.from(this.formatters.values()).map((f) =>
+      f.initialize(),
+    );
+    await Promise.all(promises);
+  }
 }
 
 /** Global formatter registry */
@@ -54,44 +60,48 @@ let registryInstance: FormatterRegistry | null = null;
  * Registers default formatters on first call.
  */
 export function getFormatterRegistry(): FormatterRegistry {
-    if (!registryInstance) {
-        registryInstance = new DefaultFormatterRegistry();
-        
-        // Register built-in formatters
-        registryInstance.register(getSqlFormatter());
-        registryInstance.register(getPythonFormatter());
-    }
-    return registryInstance;
+  if (!registryInstance) {
+    registryInstance = new DefaultFormatterRegistry();
+
+    // Register built-in formatters
+    registryInstance.register(getSqlFormatter());
+    registryInstance.register(getPythonFormatter());
+  }
+  return registryInstance;
 }
 
 /**
  * Detect the language of code based on cell type or magic command.
  */
 export function detectLanguage(cellType: string, code?: string): string {
-    // Check for cell magic commands at the start
-    if (code) {
-        const firstLine = code.trim().split('\n')[0].trim();
-        if (firstLine === '%%sql' || firstLine.startsWith('%%sql ')) {
-            return 'sql';
-        }
-        if (firstLine === '%%python' || firstLine.startsWith('%%python ')) {
-            return 'python';
-        }
-        if (firstLine === '%%pyspark' || firstLine.startsWith('%%pyspark ')) {
-            return 'python';  // PySpark is Python
-        }
-        if (firstLine === '%%scala' || firstLine.startsWith('%%scala ')) {
-            return 'scala';
-        }
-        if (firstLine === '%%r' || firstLine.startsWith('%%r ') || firstLine === '%%R') {
-            return 'r';
-        }
+  // Check for cell magic commands at the start
+  if (code) {
+    const firstLine = code.trim().split('\n')[0].trim();
+    if (firstLine === '%%sql' || firstLine.startsWith('%%sql ')) {
+      return 'sql';
     }
-    
-    // Fall back to cell type
-    const type = cellType.toLowerCase();
-    if (isSqlCode(type)) return 'sql';
-    if (isPythonCode(type)) return 'python';
-    
-    return type;
+    if (firstLine === '%%python' || firstLine.startsWith('%%python ')) {
+      return 'python';
+    }
+    if (firstLine === '%%pyspark' || firstLine.startsWith('%%pyspark ')) {
+      return 'python'; // PySpark is Python
+    }
+    if (firstLine === '%%scala' || firstLine.startsWith('%%scala ')) {
+      return 'scala';
+    }
+    if (
+      firstLine === '%%r' ||
+      firstLine.startsWith('%%r ') ||
+      firstLine === '%%R'
+    ) {
+      return 'r';
+    }
+  }
+
+  // Fall back to cell type
+  const type = cellType.toLowerCase();
+  if (isSqlCode(type)) return 'sql';
+  if (isPythonCode(type)) return 'python';
+
+  return type;
 }

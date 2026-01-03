@@ -4,7 +4,10 @@
  * Uses @jacobknightley/fabric-format for all formatting
  */
 
-import { formatCell, initializePythonFormatter } from '@jacobknightley/fabric-format';
+import {
+  formatCell,
+  initializePythonFormatter,
+} from '@jacobknightley/fabric-format';
 
 // ============================================================================
 // Debug Logging
@@ -19,13 +22,13 @@ const DEBUG_MODE = process.env.NODE_ENV === 'development';
 const log = {
   /** Always shown - important state changes and results */
   info: (...args) => console.log('[fabric-format]', ...args),
-  
+
   /** Always shown - warnings */
   warn: (...args) => console.warn('[fabric-format]', ...args),
-  
+
   /** Always shown - errors */
   error: (...args) => console.error('[fabric-format]', ...args),
-  
+
   /** Only shown when DEBUG_MODE is true */
   debug: (...args) => {
     if (DEBUG_MODE) {
@@ -89,29 +92,29 @@ function trackTimeout(timeoutId) {
  */
 function cleanup() {
   log.debug('Cleaning up resources...');
-  
+
   // Disconnect all observers
   for (const observer of cleanupHandlers.observers) {
     try {
       observer.disconnect();
-    } catch (e) {
+    } catch (_e) {
       // Ignore errors during cleanup
     }
   }
   cleanupHandlers.observers.length = 0;
-  
+
   // Clear all intervals
   for (const intervalId of cleanupHandlers.intervals) {
     clearInterval(intervalId);
   }
   cleanupHandlers.intervals.length = 0;
-  
+
   // Clear all timeouts
   for (const timeoutId of cleanupHandlers.timeouts) {
     clearTimeout(timeoutId);
   }
   cleanupHandlers.timeouts.length = 0;
-  
+
   log.debug('Cleanup complete');
 }
 
@@ -126,39 +129,52 @@ if (typeof window !== 'undefined') {
  */
 async function investigateStorage() {
   console.log('=== Storage Investigation ===');
-  
+
   // Get cell IDs from DOM for comparison
-  const cellIds = Array.from(document.querySelectorAll('[data-cell-id]'))
-    .map(el => el.getAttribute('data-cell-id'));
+  const cellIds = Array.from(document.querySelectorAll('[data-cell-id]')).map(
+    (el) => el.getAttribute('data-cell-id'),
+  );
   console.log('Cell IDs in DOM:', cellIds);
-  
+
   // 1. Check localStorage - look for cell IDs or notebook patterns
   console.log('\n--- localStorage ---');
   console.log('Total keys:', Object.keys(localStorage).length);
-  
-  const notebookPatterns = ['notebook', 'cell', 'source', 'content', 'model', 'editor'];
+
+  const notebookPatterns = [
+    'notebook',
+    'cell',
+    'source',
+    'content',
+    'model',
+    'editor',
+  ];
   const matchingKeys = [];
-  
+
   for (const key of Object.keys(localStorage)) {
     const keyLower = key.toLowerCase();
     const value = localStorage.getItem(key);
-    
+
     // Check if key matches any cell ID
-    if (cellIds.some(id => key.includes(id))) {
+    if (cellIds.some((id) => key.includes(id))) {
       console.log(`CELL ID MATCH: ${key}`, value?.substring(0, 300));
       matchingKeys.push(key);
       continue;
     }
-    
+
     // Check if key contains notebook patterns
-    if (notebookPatterns.some(p => keyLower.includes(p))) {
+    if (notebookPatterns.some((p) => keyLower.includes(p))) {
       console.log(`PATTERN MATCH (${key}):`, value?.substring(0, 300));
       matchingKeys.push(key);
       continue;
     }
-    
+
     // Check if value contains actual code
-    if (value?.includes('SELECT') || value?.includes('spark.') || value?.includes('def ') || value?.includes('import ')) {
+    if (
+      value?.includes('SELECT') ||
+      value?.includes('spark.') ||
+      value?.includes('def ') ||
+      value?.includes('import ')
+    ) {
       // Skip if it looks like chat history
       if (!value.includes('"role"')) {
         console.log(`CODE MATCH: ${key}`, value?.substring(0, 300));
@@ -166,16 +182,19 @@ async function investigateStorage() {
       }
     }
   }
-  
+
   // 2. Check IndexedDB more thoroughly
   console.log('\n--- IndexedDB Deep Dive ---');
   if (indexedDB.databases) {
     const dbs = await indexedDB.databases();
-    console.log('Databases:', dbs.map(d => d.name));
-    
+    console.log(
+      'Databases:',
+      dbs.map((d) => d.name),
+    );
+
     for (const dbInfo of dbs) {
       if (dbInfo.name === 'workbox-expiration') continue; // Skip service worker cache
-      
+
       console.log(`\nExploring: ${dbInfo.name}`);
       try {
         const db = await new Promise((resolve, reject) => {
@@ -183,21 +202,21 @@ async function investigateStorage() {
           req.onsuccess = () => resolve(req.result);
           req.onerror = () => reject(req.error);
         });
-        
+
         for (const storeName of db.objectStoreNames) {
           const tx = db.transaction(storeName, 'readonly');
           const store = tx.objectStore(storeName);
-          
-          const allRecords = await new Promise(r => {
+
+          const allRecords = await new Promise((r) => {
             const req = store.getAll();
             req.onsuccess = () => r(req.result);
           });
-          
+
           console.log(`  ${storeName}: ${allRecords.length} records`);
-          
+
           for (const record of allRecords) {
             const str = JSON.stringify(record);
-            if (cellIds.some(id => str.includes(id))) {
+            if (cellIds.some((id) => str.includes(id))) {
               console.log(`  CELL ID in ${storeName}:`, str.substring(0, 500));
             }
           }
@@ -208,7 +227,7 @@ async function investigateStorage() {
       }
     }
   }
-  
+
   // 3. Look for Monaco model registry
   console.log('\n--- Monaco Models ---');
   try {
@@ -226,15 +245,20 @@ async function investigateStorage() {
   } catch (e) {
     console.log('Monaco access error:', e.message);
   }
-  
+
   // 4. Check for React state or other frameworks
   console.log('\n--- Framework Detection ---');
-  const rootEl = document.getElementById('root') || document.querySelector('[data-reactroot]');
+  const rootEl =
+    document.getElementById('root') ||
+    document.querySelector('[data-reactroot]');
   if (rootEl) {
-    const reactKey = Object.keys(rootEl).find(k => k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance'));
+    const reactKey = Object.keys(rootEl).find(
+      (k) =>
+        k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance'),
+    );
     console.log('React detected:', !!reactKey);
   }
-  
+
   console.log('\n=== Investigation Complete ===');
 }
 
@@ -251,12 +275,12 @@ let lastActiveEditor = null;
  */
 async function initializeFormatters() {
   if (pythonInitialized) return true;
-  
+
   try {
     // Get the WASM URL from extension resources
     const wasmUrl = chrome.runtime.getURL('dist/ruff_wasm_bg.wasm');
     log.debug('WASM URL:', wasmUrl);
-    
+
     await initializePythonFormatter({ wasmUrl });
     pythonInitialized = true;
     log.info('Formatters initialized successfully');
@@ -276,21 +300,22 @@ async function initializeFormatters() {
  */
 function detectCellType(editor) {
   if (!editor) return 'unknown';
-  
-  const modeElement = editor.querySelector('[data-mode-id]') || editor.closest('[data-mode-id]');
+
+  const modeElement =
+    editor.querySelector('[data-mode-id]') || editor.closest('[data-mode-id]');
   if (modeElement) {
     const mode = modeElement.getAttribute('data-mode-id');
     log.debug('detectCellType: found data-mode-id =', mode);
     return mode;
   }
-  
+
   const classList = editor.className || '';
   const langMatch = classList.match(/lang-(\w+)/);
   if (langMatch) {
     log.debug('detectCellType: found lang- class =', langMatch[1]);
     return langMatch[1];
   }
-  
+
   log.debug('detectCellType: could not determine type, returning unknown');
   return 'unknown';
 }
@@ -300,17 +325,17 @@ function detectCellType(editor) {
  */
 function mapCellTypeToLanguage(cellType) {
   const type = cellType.toLowerCase();
-  
+
   // Python/PySpark
   if (type === 'python' || type === 'pyspark' || type.includes('python')) {
     return 'python';
   }
-  
+
   // SparkSQL/SQL
   if (type === 'sql' || type === 'sparksql' || type.includes('sql')) {
     return 'sparksql';
   }
-  
+
   return null;
 }
 
@@ -319,46 +344,50 @@ function mapCellTypeToLanguage(cellType) {
 // ============================================================================
 
 function findActiveNotebookContainer() {
-  const containers = document.querySelectorAll('[class*="notebook"], [class*="Notebook"], [class*="cell-list"], [class*="cellList"]');
-  
+  const containers = document.querySelectorAll(
+    '[class*="notebook"], [class*="Notebook"], [class*="cell-list"], [class*="cellList"]',
+  );
+
   for (const container of containers) {
     const rect = container.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) continue;
-    
+
     const style = window.getComputedStyle(container);
     if (style.display === 'none' || style.visibility === 'hidden') continue;
-    
+
     const editors = container.querySelectorAll('.monaco-editor');
-    const visibleEditors = Array.from(editors).filter(ed => {
+    const visibleEditors = Array.from(editors).filter((ed) => {
       const edRect = ed.getBoundingClientRect();
       return edRect.width > 0 && edRect.height > 0;
     });
-    
+
     if (visibleEditors.length >= 1) {
       return container;
     }
   }
-  
+
   const allEditors = document.querySelectorAll('.monaco-editor');
   for (const editor of allEditors) {
     const edRect = editor.getBoundingClientRect();
     if (edRect.width === 0 || edRect.height === 0) continue;
-    
+
     let current = editor.parentElement;
     while (current && current !== document.body) {
       const editors = current.querySelectorAll?.('.monaco-editor');
-      const visibleCount = editors ? Array.from(editors).filter(e => {
-        const r = e.getBoundingClientRect();
-        return r.width > 0 && r.height > 0;
-      }).length : 0;
-      
+      const visibleCount = editors
+        ? Array.from(editors).filter((e) => {
+            const r = e.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+          }).length
+        : 0;
+
       if (visibleCount >= 2) {
         return current;
       }
       current = current.parentElement;
     }
   }
-  
+
   return document;
 }
 
@@ -367,19 +396,27 @@ function findActiveNotebookContainer() {
 // ============================================================================
 
 function setupEditorFocusTracking() {
-  document.addEventListener('focusin', (event) => {
-    const editor = event.target.closest('.monaco-editor');
-    if (editor && editor !== lastActiveEditor) {
-      lastActiveEditor = editor;
-    }
-  }, true);
-  
-  document.addEventListener('mousedown', (event) => {
-    const editor = event.target.closest('.monaco-editor');
-    if (editor && editor !== lastActiveEditor) {
-      lastActiveEditor = editor;
-    }
-  }, true);
+  document.addEventListener(
+    'focusin',
+    (event) => {
+      const editor = event.target.closest('.monaco-editor');
+      if (editor && editor !== lastActiveEditor) {
+        lastActiveEditor = editor;
+      }
+    },
+    true,
+  );
+
+  document.addEventListener(
+    'mousedown',
+    (event) => {
+      const editor = event.target.closest('.monaco-editor');
+      if (editor && editor !== lastActiveEditor) {
+        lastActiveEditor = editor;
+      }
+    },
+    true,
+  );
 }
 
 // ============================================================================
@@ -388,7 +425,7 @@ function setupEditorFocusTracking() {
 
 function findActiveCell() {
   const activeElement = document.activeElement;
-  
+
   if (activeElement) {
     if (activeElement.classList?.contains('inputarea')) {
       const editor = activeElement.closest('.monaco-editor');
@@ -397,59 +434,75 @@ function findActiveCell() {
         return editor;
       }
     }
-    
+
     const activeEditor = activeElement.closest('.monaco-editor');
     if (activeEditor) {
       log.debug('findActiveCell: found via closest monaco-editor');
       return activeEditor;
     }
   }
-  
+
   if (lastActiveEditor && document.contains(lastActiveEditor)) {
     log.debug('findActiveCell: using lastActiveEditor');
     return lastActiveEditor;
   }
-  
+
   log.debug('findActiveCell: no active cell found');
   return null;
 }
 
-function findCurrentlyVisibleCells() {
+function _findCurrentlyVisibleCells() {
   const cells = [];
   const notebookContainer = findActiveNotebookContainer();
   const searchRoot = notebookContainer || document;
-  
+
   const editors = searchRoot.querySelectorAll('.monaco-editor');
-  let skipped = { ownerDoc: 0, zeroSize: 0, hidden: 0, noLanguage: 0 };
-  
+  const skipped = { ownerDoc: 0, zeroSize: 0, hidden: 0, noLanguage: 0 };
+
   for (const editor of editors) {
-    if (editor.ownerDocument !== document) { skipped.ownerDoc++; continue; }
-    
+    if (editor.ownerDocument !== document) {
+      skipped.ownerDoc++;
+      continue;
+    }
+
     const rect = editor.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) { skipped.zeroSize++; continue; }
-    
+    if (rect.width === 0 || rect.height === 0) {
+      skipped.zeroSize++;
+      continue;
+    }
+
     const style = window.getComputedStyle(editor);
-    if (style.display === 'none' || style.visibility === 'hidden') { skipped.hidden++; continue; }
-    
+    if (style.display === 'none' || style.visibility === 'hidden') {
+      skipped.hidden++;
+      continue;
+    }
+
     const cellType = detectCellType(editor);
     const language = mapCellTypeToLanguage(cellType);
-    
+
     if (language) {
       cells.push({ editor, cellType, language });
     } else {
       skipped.noLanguage++;
     }
   }
-  
-  log.debug('findCurrentlyVisibleCells: found', cells.length, 'formattable, skipped:', skipped);
+
+  log.debug(
+    'findCurrentlyVisibleCells: found',
+    cells.length,
+    'formattable, skipped:',
+    skipped,
+  );
   return cells;
 }
 
 /**
  * Get the total cell count from Fabric's UI
  */
-function getTotalCellCount() {
-  const cellSelectionBtn = document.querySelector('button[name="CellSelection"]');
+function _getTotalCellCount() {
+  const cellSelectionBtn = document.querySelector(
+    'button[name="CellSelection"]',
+  );
   if (cellSelectionBtn) {
     const text = cellSelectionBtn.textContent;
     const match = text.match(/of\s+(\d+)\s+cells?/i);
@@ -466,31 +519,35 @@ function getTotalCellCount() {
 function findScrollContainer() {
   const knownContainers = [
     '.notebook-container',
-    '.notebook-cell-list', 
+    '.notebook-cell-list',
     '.cell-list-container',
     '[class*="notebook-container"]',
-    '[class*="notebookContainer"]'
+    '[class*="notebookContainer"]',
   ];
-  
+
   for (const selector of knownContainers) {
     const el = document.querySelector(selector);
     if (el && el.scrollHeight > el.clientHeight) {
       return el;
     }
   }
-  
-  const scrollables = Array.from(document.querySelectorAll('div')).filter(el => {
-    const style = window.getComputedStyle(el);
-    return (style.overflowY === 'auto' || style.overflowY === 'scroll') &&
-           el.scrollHeight > el.clientHeight;
-  });
-  
+
+  const scrollables = Array.from(document.querySelectorAll('div')).filter(
+    (el) => {
+      const style = window.getComputedStyle(el);
+      return (
+        (style.overflowY === 'auto' || style.overflowY === 'scroll') &&
+        el.scrollHeight > el.clientHeight
+      );
+    },
+  );
+
   for (const container of scrollables) {
     if (container.querySelector('.monaco-editor')) {
       return container;
     }
   }
-  
+
   if (scrollables.length > 0) {
     return scrollables[0];
   }
@@ -505,19 +562,19 @@ function findScrollContainer() {
 function extractCodeFromEditor(editorElement) {
   const lines = editorElement.querySelectorAll('.view-lines .view-line');
   const codeLines = [];
-  
+
   log.debug('extractCodeFromEditor: found', lines.length, 'view-lines');
-  
+
   const sortedLines = Array.from(lines).sort((a, b) => {
     const topA = parseFloat(a.style.top) || 0;
     const topB = parseFloat(b.style.top) || 0;
     return topA - topB;
   });
-  
+
   for (const line of sortedLines) {
     let lineText = '';
     const spans = line.querySelectorAll('span > span');
-    
+
     if (spans.length > 0) {
       for (const span of spans) {
         lineText += span.textContent.replace(/\u00a0/g, ' ');
@@ -525,12 +582,18 @@ function extractCodeFromEditor(editorElement) {
     } else {
       lineText = line.textContent.replace(/\u00a0/g, ' ');
     }
-    
+
     codeLines.push(lineText);
   }
-  
+
   const code = codeLines.join('\n');
-  log.debug('extractCodeFromEditor: extracted', codeLines.length, 'lines,', code.length, 'chars');
+  log.debug(
+    'extractCodeFromEditor: extracted',
+    codeLines.length,
+    'lines,',
+    code.length,
+    'chars',
+  );
   return code;
 }
 
@@ -539,44 +602,54 @@ async function setCodeViaPaste(editorElement, codeToInsert) {
   try {
     // Scroll the editor into view first to ensure it's not virtualized
     editorElement.scrollIntoView({ block: 'center', behavior: 'instant' });
-    await new Promise(r => setTimeout(r, 100));
-    
+    await new Promise((r) => setTimeout(r, 100));
+
     // Verify the editor is still valid after scrolling
     if (!editorElement.isConnected) {
       log.error('Editor element disconnected after scroll');
       return false;
     }
-    
+
     const textarea = editorElement.querySelector('textarea.inputarea');
     if (!textarea) {
       log.error('No textarea found in editor');
       return false;
     }
-    
+
     textarea.focus();
-    await new Promise(r => setTimeout(r, 50));
-    
-    textarea.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'a', code: 'KeyA', keyCode: 65, which: 65,
-      ctrlKey: true, bubbles: true, cancelable: true
-    }));
-    await new Promise(r => setTimeout(r, 50));
-    
-    if (document.activeElement !== textarea && !editorElement.contains(document.activeElement)) {
+    await new Promise((r) => setTimeout(r, 50));
+
+    textarea.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'a',
+        code: 'KeyA',
+        keyCode: 65,
+        which: 65,
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await new Promise((r) => setTimeout(r, 50));
+
+    if (
+      document.activeElement !== textarea &&
+      !editorElement.contains(document.activeElement)
+    ) {
       log.error('Focus lost during paste - aborting');
       return false;
     }
-    
+
     await navigator.clipboard.writeText(codeToInsert);
-    
+
     const pasteEvent = new ClipboardEvent('paste', {
       bubbles: true,
       cancelable: true,
-      clipboardData: new DataTransfer()
+      clipboardData: new DataTransfer(),
     });
     pasteEvent.clipboardData.setData('text/plain', codeToInsert);
     textarea.dispatchEvent(pasteEvent);
-    
+
     log.debug('setCodeViaPaste: paste dispatched successfully');
     return true;
   } catch (error) {
@@ -644,14 +717,14 @@ function showNotification(message, type = 'success') {
   if (notificationElement) {
     notificationElement.remove();
   }
-  
+
   const colors = {
     success: { bg: '#0e4429', border: '#238636', text: '#ffffff' },
     warning: { bg: '#4a3800', border: '#9e6a03', text: '#ffffff' },
-    error: { bg: '#4a0e0e', border: '#f85149', text: '#ffffff' }
+    error: { bg: '#4a0e0e', border: '#f85149', text: '#ffffff' },
   };
   const color = colors[type] || colors.success;
-  
+
   notificationElement = document.createElement('div');
   notificationElement.style.cssText = `
     position: fixed; bottom: 50px; right: 20px; z-index: 1000000;
@@ -661,12 +734,12 @@ function showNotification(message, type = 'success') {
     font-size: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
     display: flex; align-items: center; gap: 8px;
   `;
-  
+
   const icon = type === 'success' ? '✓' : type === 'warning' ? '⚠' : '✕';
   notificationElement.innerHTML = `<span>${icon}</span><span>${message}</span>`;
-  
+
   document.body.appendChild(notificationElement);
-  
+
   setTimeout(() => {
     if (notificationElement) {
       notificationElement.remove();
@@ -682,52 +755,64 @@ function showNotification(message, type = 'success') {
 /**
  * Format the current cell
  */
-async function formatCurrentCell() {
+async function _formatCurrentCell() {
   const cell = findActiveCell();
   if (!cell) {
     showNotification('No active cell found. Click in a cell first.', 'warning');
     return;
   }
-  
+
   const cellType = detectCellType(cell);
   const language = mapCellTypeToLanguage(cellType);
-  
+
   log.debug('formatCurrentCell - cellType:', cellType, 'language:', language);
-  
+
   if (!language) {
-    showNotification(`Cell type "${cellType}" not supported. Only Python and SparkSQL are supported.`, 'warning');
+    showNotification(
+      `Cell type "${cellType}" not supported. Only Python and SparkSQL are supported.`,
+      'warning',
+    );
     return;
   }
-  
+
   // Ensure formatters are initialized
   if (!pythonInitialized) {
     await initializeFormatters();
   }
-  
+
   const originalCode = extractCodeFromEditor(cell);
   if (!originalCode.trim()) {
     showNotification('Cell is empty', 'warning');
     return;
   }
-  
-  log.debug('formatCurrentCell - code length:', originalCode.length, 'pythonInitialized:', pythonInitialized);
+
+  log.debug(
+    'formatCurrentCell - code length:',
+    originalCode.length,
+    'pythonInitialized:',
+    pythonInitialized,
+  );
   log.debug('formatCurrentCell - originalCode:', JSON.stringify(originalCode));
-  
+
   const result = formatCell(originalCode, language);
-  
-  log.debug('formatCurrentCell - result:', { changed: result.changed, error: result.error, formattedLength: result.formatted?.length });
+
+  log.debug('formatCurrentCell - result:', {
+    changed: result.changed,
+    error: result.error,
+    formattedLength: result.formatted?.length,
+  });
   log.debug('formatCurrentCell - formatted:', JSON.stringify(result.formatted));
-  
+
   if (result.error) {
     showNotification(`Format failed: ${result.error}`, 'error');
     return;
   }
-  
+
   if (result.formatted === originalCode) {
     showNotification('Already formatted', 'success');
     return;
   }
-  
+
   const success = await setCodeViaPaste(cell, result.formatted);
   if (success) {
     showNotification('Formatted!', 'success');
@@ -741,55 +826,61 @@ async function formatCurrentCell() {
  */
 async function formatAllCells() {
   showOverlay('Initializing...');
-  
+
   // Initialize formatters
   await initializeFormatters();
-  
+
   // Get all cell containers
-  const cellContainers = document.querySelectorAll('.nteract-cell-container[data-cell-id]');
+  const cellContainers = document.querySelectorAll(
+    '.nteract-cell-container[data-cell-id]',
+  );
   const totalCells = cellContainers.length;
-  
+
   if (totalCells === 0) {
     hideOverlay();
     showNotification('No cells found', 'warning');
     return;
   }
-  
+
   // Capture scroll position using the same function we use elsewhere
   const scrollContainer = findScrollContainer();
   const originalScroll = scrollContainer?.scrollTop || 0;
   log.debug('formatAllCells: captured scroll position', originalScroll);
-  
+
   let formatted = 0;
   let alreadyFormatted = 0;
   let failed = 0;
-  let skipped = 0;
-  
+  let _skipped = 0;
+
   // Single pass: scroll to each cell, extract, format, apply
   for (let i = 0; i < cellContainers.length; i++) {
     const cellContainer = cellContainers[i];
     updateOverlay(`Processing cell ${i + 1}/${totalCells}...`);
-    
+
     // Always scroll to ensure full content is rendered (Monaco virtualizes tall cells)
     cellContainer.scrollIntoView({ block: 'center', behavior: 'instant' });
-    
+
     // Wait for editor content to appear (lines render in one shot, not progressively)
     let editor = null;
     let lastLineCount = -1;
     let stableChecks = 0;
     const startTime = performance.now();
-    
-    for (let attempt = 0; attempt < 60; attempt++) { // Up to 1.8s total
-      await new Promise(r => setTimeout(r, 30)); // Faster polling
+
+    for (let attempt = 0; attempt < 60; attempt++) {
+      // Up to 1.8s total
+      await new Promise((r) => setTimeout(r, 30)); // Faster polling
       editor = cellContainer.querySelector('.monaco-editor');
       if (editor) {
         const viewLines = editor.querySelectorAll('.view-lines .view-line');
         const currentCount = viewLines.length;
-        
+
         if (currentCount > 0 && currentCount === lastLineCount) {
           stableChecks++;
-          if (stableChecks >= 2) { // Only need 2 checks since lines don't change progressively
-            log.debug(`Cell ${i + 1}: stable at ${currentCount} lines after ${Math.round(performance.now() - startTime)}ms`);
+          if (stableChecks >= 2) {
+            // Only need 2 checks since lines don't change progressively
+            log.debug(
+              `Cell ${i + 1}: stable at ${currentCount} lines after ${Math.round(performance.now() - startTime)}ms`,
+            );
             break;
           }
         } else {
@@ -798,42 +889,42 @@ async function formatAllCells() {
         }
       }
     }
-    
+
     if (!editor) {
-      skipped++;
+      _skipped++;
       continue;
     }
-    
+
     // Use proper language detection
     const cellType = detectCellType(editor);
     const language = mapCellTypeToLanguage(cellType);
-    
+
     if (!language) {
-      skipped++;
+      _skipped++;
       continue;
     }
-    
+
     // Extract code
     const originalCode = extractCodeFromEditor(editor);
     if (!originalCode.trim()) {
-      skipped++;
+      _skipped++;
       continue;
     }
-    
+
     // Format
     const result = formatCell(originalCode, language);
-    
+
     if (result.error) {
       log.warn('Format error on cell', i, ':', result.error);
       failed++;
       continue;
     }
-    
+
     if (result.formatted === originalCode) {
       alreadyFormatted++;
       continue;
     }
-    
+
     // Apply the formatted code
     const success = await setCodeViaPaste(editor, result.formatted);
     if (success) {
@@ -841,27 +932,27 @@ async function formatAllCells() {
     } else {
       failed++;
     }
-    
-    await new Promise(r => setTimeout(r, 50));
+
+    await new Promise((r) => setTimeout(r, 50));
   }
-  
+
   // Restore scroll position
   if (scrollContainer) {
     scrollContainer.scrollTop = originalScroll;
     log.debug('formatAllCells: restored scroll position to', originalScroll);
   }
-  
+
   hideOverlay();
-  
+
   // Small delay to let scroll settle before showing notification
-  await new Promise(r => setTimeout(r, 100));
-  
+  await new Promise((r) => setTimeout(r, 100));
+
   // Show summary
   const parts = [];
   if (formatted > 0) parts.push(`${formatted} formatted`);
   if (alreadyFormatted > 0) parts.push(`${alreadyFormatted} already clean`);
   if (failed > 0) parts.push(`${failed} failed`);
-  
+
   const message = parts.join(', ') || 'No changes needed';
   const type = failed > 0 ? 'warning' : 'success';
   showNotification(message, type);
@@ -902,11 +993,13 @@ function isIframeActive() {
  */
 function findStatusBar() {
   // Try multiple selectors - Fabric's class names can change
-  return document.querySelector('div[class*="___fr9w3r0"]') || 
-         document.querySelector('div.f1pha7fy.f1ewtqcl.f5ogflp') ||
-         document.querySelector('div[class*="f1pha7fy"][class*="f1ewtqcl"]') ||
-         // Additional fallback: look for the status bar by structure (contains CellSelection button)
-         document.querySelector('button[name="CellSelection"]')?.parentElement;
+  return (
+    document.querySelector('div[class*="___fr9w3r0"]') ||
+    document.querySelector('div.f1pha7fy.f1ewtqcl.f5ogflp') ||
+    document.querySelector('div[class*="f1pha7fy"][class*="f1ewtqcl"]') ||
+    // Additional fallback: look for the status bar by structure (contains CellSelection button)
+    document.querySelector('button[name="CellSelection"]')?.parentElement
+  );
 }
 
 function createFloatingButton() {
@@ -921,14 +1014,14 @@ function createFloatingButton() {
     }
     existing.remove();
   }
-  
+
   const statusBar = findStatusBar();
-  
+
   if (statusBar) {
     if (statusBar.querySelector('button[name="FormatCells"]')) {
       return true; // Already has our button
     }
-    
+
     const button = document.createElement('button');
     button.type = 'button';
     button.name = 'FormatCells';
@@ -954,7 +1047,7 @@ function createFloatingButton() {
       transition: background-color 0.1s ease;
       margin-left: auto;
     `;
-    
+
     button.innerHTML = `
       <span class="fui-Button__icon" style="display: flex; align-items: center; color: #881798;">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
@@ -962,28 +1055,30 @@ function createFloatingButton() {
         </svg>
       </span>
       <span>Format</span>`;
-    
+
     button.addEventListener('mouseenter', () => {
       button.style.backgroundColor = 'rgba(0, 0, 0, 0.05)';
     });
-    
+
     button.addEventListener('mouseleave', () => {
       button.style.backgroundColor = 'transparent';
     });
-    
+
     button.addEventListener('click', formatAllCells);
-    
-    const cellSelectionButton = statusBar.querySelector('button[name="CellSelection"]');
+
+    const cellSelectionButton = statusBar.querySelector(
+      'button[name="CellSelection"]',
+    );
     if (cellSelectionButton) {
       statusBar.insertBefore(button, cellSelectionButton);
     } else {
       statusBar.appendChild(button);
     }
-    
+
     log.info('Button injected into status bar');
     return true;
   }
-  
+
   log.debug('Status bar not found, will retry later');
   return false;
 }
@@ -996,16 +1091,16 @@ async function waitForStatusBarAndInject(maxWaitMs = 5000) {
   const startTime = Date.now();
   let delay = 100;
   const maxDelay = 500;
-  
+
   while (Date.now() - startTime < maxWaitMs) {
     if (createFloatingButton()) {
       return true;
     }
-    
-    await new Promise(r => setTimeout(r, delay));
+
+    await new Promise((r) => setTimeout(r, delay));
     delay = Math.min(delay * 1.5, maxDelay);
   }
-  
+
   log.debug('No status bar found - this iframe is not the active notebook');
   return false;
 }
@@ -1032,7 +1127,10 @@ function getFrameDetails() {
     frameDepth: (() => {
       let depth = 0;
       let win = window;
-      while (win !== win.top) { depth++; win = win.parent; }
+      while (win !== win.top) {
+        depth++;
+        win = win.parent;
+      }
       return depth;
     })(),
     frameName: window.name || '(none)',
@@ -1042,8 +1140,12 @@ function getFrameDetails() {
     bodyClasses: document.body?.className || '(none)',
     // Key elements
     hasMonacoEditors: document.querySelectorAll('.monaco-editor').length,
-    hasStatusBar: !!document.querySelector('[class*="status-bar"], [class*="statusbar"], [class*="StatusBar"]'),
-    hasNotebookContainer: !!document.querySelector('[class*="notebook"], [class*="Notebook"]'),
+    hasStatusBar: !!document.querySelector(
+      '[class*="status-bar"], [class*="statusbar"], [class*="StatusBar"]',
+    ),
+    hasNotebookContainer: !!document.querySelector(
+      '[class*="notebook"], [class*="Notebook"]',
+    ),
     // Dimensions
     innerWidth: window.innerWidth,
     innerHeight: window.innerHeight,
@@ -1065,12 +1167,12 @@ function init() {
     log.debug('Skipping top frame');
     return;
   }
-  
+
   if (!hostname.includes('pbides')) {
     log.debug('Skipping non-pbides iframe:', hostname);
     return;
   }
-  
+
   if (iframeType === 'worker') {
     log.debug('Skipping worker iframe');
     return;
@@ -1079,29 +1181,37 @@ function init() {
   log.debug('Init starting:', getFrameDetails());
 
   setupEditorFocusTracking();
-  
+
   // Quick check: does this iframe have editors? Check a few times with short delays.
   // If no editors after ~3 seconds, this isn't the notebook iframe - give up.
   const checkForEditors = async () => {
     for (let attempt = 1; attempt <= 5; attempt++) {
       const editorCount = document.querySelectorAll('.monaco-editor').length;
       if (editorCount > 0) {
-        log.debug('✓ WINNER - Found', editorCount, 'editors on attempt', attempt);
+        log.debug(
+          '✓ WINNER - Found',
+          editorCount,
+          'editors on attempt',
+          attempt,
+        );
         log.debug('✓ WINNER frame details:', getFrameDetails());
-        
+
         // Run storage investigation
         await investigateStorage();
-        
+
         const success = await waitForStatusBarAndInject();
         log.info('Ready - button injected:', success);
         return;
       }
       // Wait 500ms between checks (total ~2.5 seconds)
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 500));
     }
-    log.debug('✗ LOSER - No editors found, giving up. Frame details:', getFrameDetails());
+    log.debug(
+      '✗ LOSER - No editors found, giving up. Frame details:',
+      getFrameDetails(),
+    );
   };
-  
+
   // Start checking once document is ready
   if (document.readyState === 'complete') {
     checkForEditors();
@@ -1113,7 +1223,7 @@ function init() {
     const button = document.getElementById('fabric-formatter-button');
     const active = isIframeActive();
     const editorCount = document.querySelectorAll('.monaco-editor').length;
-    
+
     if (active) {
       if (!button && editorCount > 0) {
         createFloatingButton();
@@ -1126,45 +1236,54 @@ function init() {
   });
 
   let lastActiveState = null;
-  trackInterval(setInterval(() => {
-    const button = document.getElementById('fabric-formatter-button');
-    const active = isIframeActive();
-    const editorCount = document.querySelectorAll('.monaco-editor').length;
-    
-    const buttonIsValid = button && button.isConnected && button.offsetParent !== null;
-
-    if (active !== lastActiveState) {
-      lastActiveState = active;
-    }
-
-    if (active && !buttonIsValid && editorCount > 0) {
-      createFloatingButton();
-    } else if (!active && button) {
-      button.remove();
-    }
-  }, 500));
-
-  const observer = trackObserver(new MutationObserver((mutations) => {
-    const button = document.getElementById('fabric-formatter-button');
-    const buttonIsValid = button && button.isConnected && button.offsetParent !== null;
-    
-    if (!buttonIsValid && isIframeActive()) {
+  trackInterval(
+    setInterval(() => {
+      const button = document.getElementById('fabric-formatter-button');
+      const active = isIframeActive();
       const editorCount = document.querySelectorAll('.monaco-editor').length;
-      if (editorCount > 0) {
-        // Check if status bar was just added
-        const statusBar = findStatusBar();
-        if (statusBar && !statusBar.querySelector('button[name="FormatCells"]')) {
-          trackTimeout(setTimeout(() => {
-            createFloatingButton();
-          }, 50));
+
+      const buttonIsValid = button?.isConnected && button.offsetParent !== null;
+
+      if (active !== lastActiveState) {
+        lastActiveState = active;
+      }
+
+      if (active && !buttonIsValid && editorCount > 0) {
+        createFloatingButton();
+      } else if (!active && button) {
+        button.remove();
+      }
+    }, 500),
+  );
+
+  const observer = trackObserver(
+    new MutationObserver((_mutations) => {
+      const button = document.getElementById('fabric-formatter-button');
+      const buttonIsValid = button?.isConnected && button.offsetParent !== null;
+
+      if (!buttonIsValid && isIframeActive()) {
+        const editorCount = document.querySelectorAll('.monaco-editor').length;
+        if (editorCount > 0) {
+          // Check if status bar was just added
+          const statusBar = findStatusBar();
+          if (
+            statusBar &&
+            !statusBar.querySelector('button[name="FormatCells"]')
+          ) {
+            trackTimeout(
+              setTimeout(() => {
+                createFloatingButton();
+              }, 50),
+            );
+          }
         }
       }
-    }
-  }));
-  
+    }),
+  );
+
   observer.observe(document.body, {
     childList: true,
-    subtree: true
+    subtree: true,
   });
 
   // Pre-initialize formatters in background

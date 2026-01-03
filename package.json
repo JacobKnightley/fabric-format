@@ -12,6 +12,12 @@
     "test:core": "npm run test -w @jacobknightley/fabric-format",
     "test:chromium": "npm run test -w fabric-format-chromium",
     "package:chromium": "npm run package -w fabric-format-chromium",
-    "release": "node scripts/release.js"
+    "release": "node scripts/release.js",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.3.10"
   }
 }

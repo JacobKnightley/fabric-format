@@ -4,9 +4,12 @@
  * Supports Python (.py), Scala (.scala), and R (.r) notebooks
  */
 
-import { TestSuite, TestCase } from '../framework.js';
-import { parseNotebook, NotebookStructureError } from '../../notebook-formatter.js';
 import { formatSql } from '../../formatters/sparksql/index.js';
+import {
+  NotebookStructureError,
+  parseNotebook,
+} from '../../notebook-formatter.js';
+import type { TestCase, TestSuite } from '../framework.js';
 
 /**
  * Infer file extension from notebook header for tests.
@@ -43,7 +46,7 @@ const formatNotebookTests: TestCase[] = [
 # MAGIC %%sql
 # MAGIC SELECT * FROM table WHERE id = 1
 
-# METADATA ********************`
+# METADATA ********************`,
   ),
   fabricTest(
     'formats multiple SQL cells (simple queries stay inline)',
@@ -76,7 +79,7 @@ const formatNotebookTests: TestCase[] = [
 # MAGIC %%sql
 # MAGIC SELECT b FROM t2
 
-# METADATA ********************`
+# METADATA ********************`,
   ),
   fabricTest(
     'preserves Python cells unchanged',
@@ -107,14 +110,14 @@ print("hello world")
 # MAGIC %%sql
 # MAGIC SELECT * FROM t
 
-# METADATA ********************`
+# METADATA ********************`,
   ),
   fabricTest(
     'returns non-Fabric file unchanged',
     `# Regular Python file
 print("hello")`,
     `# Regular Python file
-print("hello")`
+print("hello")`,
   ),
   fabricTest(
     'handles multi-line SQL with JOINs (expands)',
@@ -139,7 +142,7 @@ print("hello")`
 # MAGIC     ON a.id = b.id
 # MAGIC WHERE a.status = 1
 
-# METADATA ********************`
+# METADATA ********************`,
   ),
   fabricTest(
     'handles CREATE VIEW statements (expands with multiple columns)',
@@ -162,7 +165,7 @@ print("hello")`
 # MAGIC     ,col2
 # MAGIC FROM source_table
 
-# METADATA ********************`
+# METADATA ********************`,
   ),
 ];
 
@@ -185,7 +188,7 @@ const scalaNotebookTests: TestCase[] = [
 // MAGIC %%sql
 // MAGIC SELECT * FROM table WHERE id = 1
 
-// METADATA ********************`
+// METADATA ********************`,
   ),
   fabricTest(
     'formats multiple SQL cells in Scala notebook',
@@ -218,7 +221,7 @@ const scalaNotebookTests: TestCase[] = [
 // MAGIC %%sql
 // MAGIC SELECT b FROM t2
 
-// METADATA ********************`
+// METADATA ********************`,
   ),
   fabricTest(
     'preserves Scala code cells unchanged',
@@ -249,7 +252,7 @@ val df = spark.read.table("my_table")
 // MAGIC %%sql
 // MAGIC SELECT * FROM t
 
-// METADATA ********************`
+// METADATA ********************`,
   ),
   fabricTest(
     'handles multi-line SQL in Scala notebook (expands)',
@@ -273,7 +276,7 @@ val df = spark.read.table("my_table")
 // MAGIC INNER JOIN table_b b
 // MAGIC     ON a.id = b.id
 
-// METADATA ********************`
+// METADATA ********************`,
   ),
   fabricTest(
     'returns non-Fabric Scala file unchanged',
@@ -284,7 +287,7 @@ object Main extends App {
     `// Regular Scala file
 object Main extends App {
   println("hello")
-}`
+}`,
   ),
 ];
 
@@ -312,7 +315,7 @@ const sqlNotebookTests: TestCase[] = [
 -- MAGIC %%sql
 -- MAGIC SELECT * FROM test
 
--- METADATA ********************`
+-- METADATA ********************`,
   ),
   fabricTest(
     'formats raw SQL cell (no MAGIC prefix, stays compact)',
@@ -329,7 +332,7 @@ select * from test
 
 SELECT * FROM test
 
--- METADATA ********************`
+-- METADATA ********************`,
   ),
   fabricTest(
     'formats mixed MAGIC and raw SQL cells (simple queries stay compact)',
@@ -360,7 +363,7 @@ select name from table_b
 
 SELECT name FROM table_b
 
--- METADATA ********************`
+-- METADATA ********************`,
   ),
   fabricTest(
     'formats raw SQL cell with JOIN (expands)',
@@ -382,7 +385,7 @@ FROM table_a a
 INNER JOIN table_b b
     ON a.id = b.id
 
--- METADATA ********************`
+-- METADATA ********************`,
   ),
   fabricTest(
     'preserves non-SQL cells in SQL notebook (raw SQL stays compact)',
@@ -413,14 +416,14 @@ select * from test
 
 SELECT * FROM test
 
--- METADATA ********************`
+-- METADATA ********************`,
   ),
   fabricTest(
     'returns non-Fabric SQL file unchanged',
     `-- Regular SQL file
 SELECT * FROM test;`,
     `-- Regular SQL file
-SELECT * FROM test;`
+SELECT * FROM test;`,
   ),
 ];
 
@@ -430,28 +433,38 @@ SELECT * FROM test;`
 function formatNotebookContent(content: string): string {
   const ext = inferExtension(content);
   const notebook = parseNotebook(content, ext);
-  
-  if (!notebook.isFabricNotebook || notebook.cells.length === 0 || !notebook.config) {
+
+  if (
+    !notebook.isFabricNotebook ||
+    notebook.cells.length === 0 ||
+    !notebook.config
+  ) {
     return content;
   }
-  
+
   let result = content;
-  
+
   // Process Spark SQL cells in reverse order to preserve line numbers
-  const sparkSqlCells = notebook.cells.filter(c => c.language === 'sparksql').reverse();
-  
+  const sparkSqlCells = notebook.cells
+    .filter((c) => c.language === 'sparksql')
+    .reverse();
+
   for (const cell of sparkSqlCells) {
     const formatted = formatSql(cell.content);
     // Replace cell content in result
     const lines = result.split(/\r?\n/);
     const prefix = notebook.config.magicPrefix;
-    const formattedLines = formatted.split(/\r?\n/).map(line => 
-      cell.isRawCell ? line : `${prefix}${line}`
+    const formattedLines = formatted
+      .split(/\r?\n/)
+      .map((line) => (cell.isRawCell ? line : `${prefix}${line}`));
+    lines.splice(
+      cell.contentStartLine,
+      cell.contentEndLine - cell.contentStartLine + 1,
+      ...formattedLines,
     );
-    lines.splice(cell.contentStartLine, cell.contentEndLine - cell.contentStartLine + 1, ...formattedLines);
     result = lines.join('\n');
   }
-  
+
   return result;
 }
 
@@ -471,9 +484,29 @@ export const sqlMagicSqlSuite: TestSuite = {
 };
 
 // Export a custom runner for these suites
-export function runMagicSqlSuite(): { passed: number; failed: number; results: Array<{ name: string; passed: boolean; input?: string; expected?: string; got?: string }> } {
-  const allTests = [...formatNotebookTests, ...scalaNotebookTests, ...sqlNotebookTests];
-  const results: Array<{ name: string; passed: boolean; input?: string; expected?: string; got?: string }> = [];
+export function runMagicSqlSuite(): {
+  passed: number;
+  failed: number;
+  results: Array<{
+    name: string;
+    passed: boolean;
+    input?: string;
+    expected?: string;
+    got?: string;
+  }>;
+} {
+  const allTests = [
+    ...formatNotebookTests,
+    ...scalaNotebookTests,
+    ...sqlNotebookTests,
+  ];
+  const results: Array<{
+    name: string;
+    passed: boolean;
+    input?: string;
+    expected?: string;
+    got?: string;
+  }> = [];
   let passed = 0;
   let failed = 0;
 
@@ -682,7 +715,11 @@ export const validationSuite: TestSuite = {
 /**
  * Run validation tests that check for proper error throwing.
  */
-export function runValidationSuite(): { passed: number; failed: number; results: Array<{ name: string; passed: boolean; error?: string }> } {
+export function runValidationSuite(): {
+  passed: number;
+  failed: number;
+  results: Array<{ name: string; passed: boolean; error?: string }>;
+} {
   const results: Array<{ name: string; passed: boolean; error?: string }> = [];
   let passed = 0;
   let failed = 0;
@@ -690,7 +727,7 @@ export function runValidationSuite(): { passed: number; failed: number; results:
   for (const tc of validationTests) {
     try {
       parseNotebook(tc.content, tc.fileExtension);
-      
+
       if (tc.shouldThrow) {
         // Expected an error but didn't get one
         failed++;
@@ -709,7 +746,10 @@ export function runValidationSuite(): { passed: number; failed: number; results:
         // Check if it's the right type of error
         if (err instanceof NotebookStructureError) {
           // Check if error message contains expected text
-          if (tc.expectedErrorContains && !err.message.includes(tc.expectedErrorContains)) {
+          if (
+            tc.expectedErrorContains &&
+            !err.message.includes(tc.expectedErrorContains)
+          ) {
             failed++;
             results.push({
               name: tc.name,

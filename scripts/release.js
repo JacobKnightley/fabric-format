@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 
-const fs = require('fs');
-const path = require('path');
-const readline = require('readline');
-const { execSync } = require('child_process');
+const fs = require('node:fs');
+const path = require('node:path');
+const readline = require('node:readline');
 
 const CORE_PKG = path.join(__dirname, '../packages/core/package.json');
 const CHROMIUM_PKG = path.join(__dirname, '../packages/chromium/package.json');
@@ -17,27 +16,31 @@ function readVersion(pkgPath) {
 function writeVersion(pkgPath, version) {
   const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
   pkg.version = version;
-  fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
+  fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
 }
 
 function bumpVersion(current, type) {
   const [major, minor, patch] = current.split('.').map(Number);
   switch (type) {
-    case 'major': return `${major + 1}.0.0`;
-    case 'minor': return `${major}.${minor + 1}.0`;
-    case 'patch': return `${major}.${minor}.${patch + 1}`;
-    default: return current;
+    case 'major':
+      return `${major + 1}.0.0`;
+    case 'minor':
+      return `${major}.${minor + 1}.0`;
+    case 'patch':
+      return `${major}.${minor}.${patch + 1}`;
+    default:
+      return current;
   }
 }
 
 function prompt(rl, question) {
-  return new Promise(resolve => rl.question(question, resolve));
+  return new Promise((resolve) => rl.question(question, resolve));
 }
 
 async function main() {
   const rl = readline.createInterface({
     input: process.stdin,
-    output: process.stdout
+    output: process.stdout,
   });
 
   const coreVersion = readVersion(CORE_PKG);
@@ -51,7 +54,10 @@ async function main() {
 
   // Core can't be released without extension (extension bundles core)
   // But extension can be released alone (UI fixes, etc.)
-  const choice = await prompt(rl, 'Release: (1) Chromium only, (2) Both (core + chromium), (q) Quit: ');
+  const choice = await prompt(
+    rl,
+    'Release: (1) Chromium only, (2) Both (core + chromium), (q) Quit: ',
+  );
 
   if (choice === 'q' || choice === 'Q') {
     console.log('Cancelled.');
@@ -68,8 +74,18 @@ async function main() {
     return;
   }
 
-  const bumpType = await prompt(rl, 'Bump type: (1) patch, (2) minor, (3) major: ');
-  const type = bumpType === '1' ? 'patch' : bumpType === '2' ? 'minor' : bumpType === '3' ? 'major' : null;
+  const bumpType = await prompt(
+    rl,
+    'Bump type: (1) patch, (2) minor, (3) major: ',
+  );
+  const type =
+    bumpType === '1'
+      ? 'patch'
+      : bumpType === '2'
+        ? 'minor'
+        : bumpType === '3'
+          ? 'major'
+          : null;
 
   if (!type) {
     console.log('Invalid bump type.');
@@ -91,20 +107,25 @@ async function main() {
     console.log(`  Chromium: ${chromiumVersion} → ${newVersion}`);
     writeVersion(CHROMIUM_PKG, newVersion);
     // Also update manifest.json
-    const manifestPath = path.join(__dirname, '../packages/chromium/manifest.json');
+    const manifestPath = path.join(
+      __dirname,
+      '../packages/chromium/manifest.json',
+    );
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     manifest.version = newVersion;
-    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
     tags.push(`chromium@${newVersion}`);
   }
 
   // Always bump release ID
   const newReleaseId = releaseId + 1;
-  fs.writeFileSync(VERSION_FILE, newReleaseId.toString() + '\n');
+  fs.writeFileSync(VERSION_FILE, `${newReleaseId.toString()}\n`);
   console.log(`  Release ID: ${releaseId} → ${newReleaseId}`);
 
   console.log('\n✅ Version files updated!');
-  console.log(`\n   Commit message: release: v${newReleaseId} (${tags.join(', ')})`);
+  console.log(
+    `\n   Commit message: release: v${newReleaseId} (${tags.join(', ')})`,
+  );
   console.log('\n   Next steps:');
   console.log('   1. Stage and commit your changes');
   console.log('   2. Push and create PR to main');

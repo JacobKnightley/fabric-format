@@ -50,3 +50,6 @@ jobs:
 
       - name: Check TypeScript
         run: npx tsc --noEmit -p packages/core/tsconfig.json
+
+      - name: Lint with Biome
+        run: npm run lint

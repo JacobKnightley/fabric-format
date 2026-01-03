@@ -1,9 +1,9 @@
 /**
  * Formatting Constants
- * 
+ *
  * Central location for configurable formatting thresholds and limits.
  * These values control line-width based expansion decisions.
- * 
+ *
  * Line width checks use: currentColumn + expressionSpan > threshold
  * This ensures the FULL LINE (including indentation) stays under the limit,
  * consistent with formatters like ruff, prettier, etc.
