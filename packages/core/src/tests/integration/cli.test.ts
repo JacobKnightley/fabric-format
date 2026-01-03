@@ -4,14 +4,14 @@
  * Integration tests for the command-line interface.
  *
  * ARCHITECTURE:
- * - "Direct tests" call formatCell/formatNotebook directly (fast, in-process)
- * - "Subprocess tests" spawn the CLI binary (slow, needed for exit codes/stdin)
- *
- * Most formatting logic is tested directly. Only CLI-specific behavior
- * (argument parsing, exit codes, stdin/stdout) uses subprocesses.
+ * - All tests now use in-process runCli() for speed
+ * - Tests call the CLI logic directly without spawning subprocesses
+ * - File operations use the real filesystem (via temp directories)
+ * - One smoke test verifies the actual binary works
  */
 
 import { execSync } from 'node:child_process';
+import * as fs from 'node:fs';
 import {
   mkdirSync,
   mkdtempSync,
@@ -24,6 +24,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { formatCell } from '../../cell-formatter.js';
+import { type CliContext, runCli as runCliInProcess } from '../../cli.js';
 import { formatNotebook } from '../../notebook-formatter.js';
 import type { TestResult, TestSuite } from '../framework.js';
 
@@ -42,9 +43,34 @@ interface CliTestCase {
 }
 
 /**
- * Run CLI command and return stdout/stderr
+ * Run CLI command in-process and return stdout/stderr/exitCode
+ * This is much faster than spawning a subprocess for each test.
  */
-function runCli(
+async function runCli(
+  args: string,
+  input?: string,
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  // Parse args string into array (simple tokenization)
+  const argsArray = args.match(/(?:[^\s"]+|"[^"]*")+/g) || [];
+  // Remove quotes from arguments
+  const cleanArgs = argsArray.map((arg) => arg.replace(/^"|"$/g, ''));
+
+  // Create context with optional stdin input
+  const ctx: Partial<CliContext> = {
+    readStdin: async () => input ?? '',
+    readFile: async (p) => fs.promises.readFile(p, 'utf-8'),
+    writeFile: async (p, c) => fs.promises.writeFile(p, c, 'utf-8'),
+    stat: async (p) => fs.promises.stat(p),
+    readdir: async (p) => fs.promises.readdir(p, { withFileTypes: true }),
+  };
+
+  return runCliInProcess(cleanArgs, ctx);
+}
+
+/**
+ * Run CLI command via subprocess (for binary smoke test only)
+ */
+function runCliSubprocess(
   args: string,
   input?: string,
 ): { stdout: string; stderr: string; exitCode: number } {
@@ -57,7 +83,6 @@ function runCli(
       encoding: 'utf-8',
       input,
       timeout: 30000,
-      // Ensure we capture stderr separately
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
@@ -331,14 +356,15 @@ y=2
   },
 
   // ==========================================================================
-  // SUBPROCESS TESTS - Need CLI binary for exit codes, stdin, argument parsing
+  // IN-PROCESS TESTS - CLI argument parsing, exit codes, stdin handling
+  // All tests now run in-process for speed
   // ==========================================================================
 
   // Help commands
   {
     name: 'Shows help with no arguments',
     test: async () => {
-      const result = runCli('');
+      const result = await runCli('');
       const hasHelp =
         result.stdout.includes('fabfmt') || result.stderr.includes('fabfmt');
       return {
@@ -350,7 +376,7 @@ y=2
   {
     name: 'Shows help with --help flag',
     test: async () => {
-      const result = runCli('--help');
+      const result = await runCli('--help');
       return {
         passed:
           result.stdout.includes('Usage') || result.stdout.includes('Commands'),
@@ -363,7 +389,7 @@ y=2
   {
     name: 'Shows format help with format --help',
     test: async () => {
-      const result = runCli('format --help');
+      const result = await runCli('format --help');
       return {
         passed:
           result.stdout.includes('format') && result.stdout.includes('--type'),
@@ -374,7 +400,7 @@ y=2
   {
     name: 'Shows check help with check --help',
     test: async () => {
-      const result = runCli('check --help');
+      const result = await runCli('check --help');
       return {
         passed: result.stdout.includes('check'),
         message: 'Expected check command help',
@@ -386,7 +412,7 @@ y=2
   {
     name: 'Errors on missing file',
     test: async () => {
-      const result = runCli('format "/nonexistent/file.py"');
+      const result = await runCli('format "/nonexistent/file.py"');
       return {
         passed: result.exitCode !== 0,
         message: 'Should error on missing file',
@@ -396,7 +422,7 @@ y=2
   {
     name: 'Errors on -i without --type',
     test: async () => {
-      const result = runCli('format -i "select * from t"');
+      const result = await runCli('format -i "select * from t"');
       return {
         passed: result.exitCode !== 0 && result.stderr.includes('--type'),
         message: 'Should require --type with -i',
@@ -406,7 +432,7 @@ y=2
   {
     name: 'Errors on invalid --type value',
     test: async () => {
-      const result = runCli('format --type invalid -i "code"');
+      const result = await runCli('format --type invalid -i "code"');
       return {
         passed: result.exitCode !== 0,
         message: 'Should error on invalid type',
@@ -427,7 +453,7 @@ y=2
 `;
         writeFileSync(filePath, content);
 
-        runCli(`format "${filePath}"`);
+        await runCli(`format "${filePath}"`);
 
         const afterFormat = readFileSync(filePath, 'utf-8');
 
@@ -448,7 +474,7 @@ y=2
   {
     name: 'Errors on unknown command',
     test: async () => {
-      const result = runCli('unknowncommand');
+      const result = await runCli('unknowncommand');
       return {
         passed:
           result.exitCode !== 0 && result.stderr.includes('Unknown command'),
@@ -461,7 +487,7 @@ y=2
   {
     name: 'Errors on --type without value',
     test: async () => {
-      const result = runCli('format --type');
+      const result = await runCli('format --type');
       return {
         passed: result.exitCode !== 0 && result.stderr.includes('--type'),
         message: `Expected error about --type requiring value, got: ${result.stderr}`,
@@ -471,7 +497,7 @@ y=2
   {
     name: 'Errors on --type with flag as value',
     test: async () => {
-      const result = runCli('format --type --print');
+      const result = await runCli('format --type --print');
       return {
         passed: result.exitCode !== 0,
         message: `Expected error when --type followed by another flag`,
@@ -483,7 +509,7 @@ y=2
   {
     name: 'Errors on -i without value',
     test: async () => {
-      const result = runCli('format --type sparksql -i');
+      const result = await runCli('format --type sparksql -i');
       return {
         passed: result.exitCode !== 0 && result.stderr.includes('-i'),
         message: `Expected error about -i requiring value, got: ${result.stderr}`,
@@ -502,7 +528,7 @@ y=2
         writeFileSync(file1, '# Fabric notebook source\n');
         writeFileSync(file2, '# Fabric notebook source\n');
 
-        const result = runCli(`format "${file1}" "${file2}" --print`);
+        const result = await runCli(`format "${file1}" "${file2}" --print`);
         return {
           passed: result.exitCode !== 0 && result.stderr.includes('--print'),
           message: `Expected error about --print with multiple files`,
@@ -517,7 +543,7 @@ y=2
     test: async () => {
       const tempDir = createTempDir();
       try {
-        const result = runCli(`format "${tempDir}" --print`);
+        const result = await runCli(`format "${tempDir}" --print`);
         return {
           passed: result.exitCode !== 0 && result.stderr.includes('--print'),
           message: `Expected error about --print with directory`,
@@ -530,7 +556,7 @@ y=2
   {
     name: '--print with inline input (-i) prints to stdout',
     test: async () => {
-      const result = runCli(
+      const result = await runCli(
         'format --type sparksql -i "select * from t" --print',
       );
       return {
@@ -548,7 +574,7 @@ y=2
     name: 'Reads SQL from stdin and writes formatted output to stdout',
     test: async () => {
       const input = 'select * from users where id=1';
-      const result = runCli('format --type sparksql', input);
+      const result = await runCli('format --type sparksql', input);
       return {
         passed:
           result.exitCode === 0 &&
@@ -563,7 +589,7 @@ y=2
     name: 'Reads Python from stdin and writes formatted output to stdout',
     test: async () => {
       const input = 'x=1\ny=2';
-      const result = runCli('format --type python', input);
+      const result = await runCli('format --type python', input);
       return {
         passed:
           result.exitCode === 0 &&
@@ -577,7 +603,7 @@ y=2
     name: 'Reads multiline SQL from stdin',
     test: async () => {
       const input = 'select\na,\nb\nfrom\nt';
-      const result = runCli('format --type sparksql', input);
+      const result = await runCli('format --type sparksql', input);
       return {
         passed:
           result.exitCode === 0 &&
@@ -591,7 +617,7 @@ y=2
     name: '--print with stdin outputs to stdout',
     test: async () => {
       const input = 'select * from t';
-      const result = runCli('format --type sparksql --print', input);
+      const result = await runCli('format --type sparksql --print', input);
       return {
         passed:
           result.exitCode === 0 &&
@@ -606,7 +632,7 @@ y=2
     test: async () => {
       // Well-formatted SQL should pass check (simple queries stay inline)
       const input = 'SELECT * FROM t';
-      const result = runCli('check --type sparksql', input);
+      const result = await runCli('check --type sparksql', input);
       return {
         passed: result.exitCode === 0,
         message: `check should read from stdin and return 0 for formatted input, got exit code ${result.exitCode}`,
@@ -618,7 +644,7 @@ y=2
     test: async () => {
       // Poorly formatted SQL should fail check
       const input = 'select * from t';
-      const result = runCli('check --type sparksql', input);
+      const result = await runCli('check --type sparksql', input);
       return {
         passed: result.exitCode === 1,
         message: `check should return 1 for unformatted stdin, got ${result.exitCode}`,
@@ -629,7 +655,7 @@ y=2
     name: 'Syntax errors from stdin go to stderr',
     test: async () => {
       const input = 'select * from';
-      const result = runCli('format --type sparksql', input);
+      const result = await runCli('format --type sparksql', input);
       // Even with syntax errors, formatter tries to output something
       // We just verify it doesn't crash
       return {
@@ -641,7 +667,7 @@ y=2
   {
     name: 'Empty stdin returns empty output',
     test: async () => {
-      const result = runCli('format --type sparksql', '');
+      const result = await runCli('format --type sparksql', '');
       return {
         passed: result.exitCode === 0 && result.stdout.trim() === '',
         message: `Empty stdin should return empty output`,
@@ -653,7 +679,7 @@ y=2
   {
     name: 'Errors on format with no files',
     test: async () => {
-      const result = runCli('format');
+      const result = await runCli('format');
       return {
         passed: result.exitCode !== 0 && result.stderr.includes('No files'),
         message: `Expected error about no files specified, got: ${result.stderr}`,
@@ -663,7 +689,7 @@ y=2
   {
     name: 'Errors on check with no files',
     test: async () => {
-      const result = runCli('check');
+      const result = await runCli('check');
       return {
         passed: result.exitCode !== 0 && result.stderr.includes('No files'),
         message: `Expected error about no files specified, got: ${result.stderr}`,
@@ -675,7 +701,9 @@ y=2
   {
     name: 'Accepts --type SPARKSQL (uppercase)',
     test: async () => {
-      const result = runCli('format --type SPARKSQL -i "select * from t"');
+      const result = await runCli(
+        'format --type SPARKSQL -i "select * from t"',
+      );
       return {
         passed: result.exitCode === 0 && result.stdout.includes('SELECT'),
         message: `Expected successful formatting with uppercase type`,
@@ -685,7 +713,9 @@ y=2
   {
     name: 'Accepts --type SparkSQL (mixed case)',
     test: async () => {
-      const result = runCli('format --type SparkSQL -i "select * from t"');
+      const result = await runCli(
+        'format --type SparkSQL -i "select * from t"',
+      );
       return {
         passed: result.exitCode === 0 && result.stdout.includes('SELECT'),
         message: `Expected successful formatting with mixed case type`,
@@ -701,7 +731,7 @@ y=2
       // We can't easily test stdin, so we verify it doesn't immediately error
       // The command will timeout waiting for stdin, which is expected behavior
       try {
-        const result = runCli('check --type sparksql', '');
+        const result = await runCli('check --type sparksql', '');
         // With empty stdin, should exit 0 (empty string equals itself)
         return {
           passed: result.exitCode === 0,
@@ -718,7 +748,7 @@ y=2
   {
     name: 'Exit code 2 for user errors (invalid arguments)',
     test: async () => {
-      const result = runCli('format --type invalid -i "x"');
+      const result = await runCli('format --type invalid -i "x"');
       return {
         passed: result.exitCode === 2,
         message: `Expected exit code 2 for invalid type, got ${result.exitCode}`,
@@ -728,7 +758,7 @@ y=2
   {
     name: 'Exit code 2 for missing required arguments',
     test: async () => {
-      const result = runCli('format -i "select 1"');
+      const result = await runCli('format -i "select 1"');
       return {
         passed: result.exitCode === 2,
         message: `Expected exit code 2 for -i without --type, got ${result.exitCode}`,
@@ -764,7 +794,7 @@ y=2
         writeFileSync(join(tempDir, 'config.json'), '{}');
 
         // Run CLI ONCE for all scenarios
-        const _result = runCli(`format "${tempDir}"`);
+        const _result = await runCli(`format "${tempDir}"`);
 
         // Check all supported files were formatted
         const deepPy = readFileSync(join(sub2, 'deep.py'), 'utf-8');
@@ -892,7 +922,7 @@ y=2
         writeFileSync(join(includedDir, 'included.sql'), sqlContent);
 
         // Run CLI ONCE
-        runCli(`format "${tempDir}"`);
+        await runCli(`format "${tempDir}"`);
 
         // Check excluded files were NOT formatted
         const nmContent = readFileSync(join(nodeModules, 'test.sql'), 'utf-8');
@@ -991,7 +1021,7 @@ y=2
         writeFileSync(join(tempDir, 'readme.txt'), 'text');
         writeFileSync(join(tempDir, 'config.json'), '{}');
 
-        const result = runCli(`format "${tempDir}"`);
+        const result = await runCli(`format "${tempDir}"`);
 
         return {
           passed: result.exitCode === 0,
@@ -1051,7 +1081,7 @@ y=2
           throw e;
         }
 
-        runCli(`format "${tempDir}"`);
+        await runCli(`format "${tempDir}"`);
 
         // Both files should be formatted
         const realContent = readFileSync(realFile, 'utf-8');
@@ -1098,7 +1128,7 @@ y=2
         writeFileSync(nestedFile, sqlContent);
 
         // Format multiple paths including a specific file
-        runCli(`format "${tempDir1}" "${file2}"`);
+        await runCli(`format "${tempDir1}" "${file2}"`);
 
         const content1 = readFileSync(file1, 'utf-8');
         const content2 = readFileSync(file2, 'utf-8');
@@ -1131,7 +1161,7 @@ y=2
   {
     name: 'Reports error for nonexistent directory',
     test: async () => {
-      const result = runCli('format "/nonexistent/directory/path"');
+      const result = await runCli('format "/nonexistent/directory/path"');
       return {
         passed:
           result.exitCode !== 0 &&
@@ -1160,9 +1190,9 @@ y=2
         writeFileSync(formattedFile, formatted);
 
         // Check with unformatted - should fail
-        const unformattedResult = runCli(`check "${unformattedFile}"`);
+        const unformattedResult = await runCli(`check "${unformattedFile}"`);
         // Check with formatted dir - should pass
-        const formattedResult = runCli(`check "${formattedDir}"`);
+        const formattedResult = await runCli(`check "${formattedDir}"`);
 
         return {
           passed:
@@ -1180,6 +1210,24 @@ y=2
       passed: true,
       message: 'Covered by consolidated check test',
     }),
+  },
+
+  // ==========================================================================
+  // BINARY SMOKE TEST - Verify the actual CLI binary works (1 subprocess)
+  // ==========================================================================
+  {
+    name: 'Binary smoke test: CLI binary executes correctly',
+    test: async () => {
+      // This is the ONLY test that spawns a subprocess
+      // It verifies the actual binary/shebang/node execution works
+      const result = runCliSubprocess(
+        'format --type sparksql -i "select * from t"',
+      );
+      return {
+        passed: result.exitCode === 0 && result.stdout.includes('SELECT'),
+        message: `Binary should execute correctly, got: ${result.stdout}`,
+      };
+    },
   },
 ];
 
