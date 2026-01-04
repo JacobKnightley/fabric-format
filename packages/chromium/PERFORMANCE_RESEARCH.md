@@ -2,117 +2,101 @@
 
 ## Issue: fabric-format-gdkh
 
-This document explores alternative approaches to cell processing to improve performance while maintaining 100% accuracy.
+This document explored alternative approaches to cell processing to improve performance while maintaining 100% accuracy.
 
-## Current State (from fabric-format-xsys analysis)
+## Conclusion: Current Approach is Near-Optimal
 
-| Phase | Time | % of Total | Required? |
-|-------|------|------------|-----------|
-| scroll | ~4.3s | 37% | YES - prevents partial capture |
-| focus | ~3.9s | 34% | YES - triggers Monaco content load |
-| stability | ~2.1s | 18% | Optimized with early exit |
-| format | ~1.1s | 9% | Actual work |
+After extensive research, the current DOM-based extraction approach with stability polling is **near-optimal** given browser security constraints.
 
-**Current timing constants:**
-- `SCROLL_SETTLE_MS`: 100ms
-- `DOM_SETTLE_MS`: 50ms (focus delay)
-- `EDITOR_LINE_POLL_MS`: 30ms (stability polling)
+### Key Findings
 
-**Result:** ~370ms/cell average, ~10s for 26 cells
+1. **Monaco API is inaccessible**: Content Security Policy (CSP) blocks script injection into the page context. We cannot access `window.monaco` or `monaco.editor.getModels()` from content scripts.
 
-## Implemented: Adaptive Timing System
+2. **Network interception is useless**: Notebook content is loaded before the page renders - by the time we could intercept, the data is already in the DOM.
 
-An experimental adaptive timing system has been added that can be enabled for testing:
+3. **Direct notebook download is slow**: Takes 10-20 seconds, much slower than DOM extraction.
 
-```javascript
-// In browser console on Fabric notebook page:
-window.__fabric_format.enableAdaptiveTiming()   // Enable experimental mode
-window.__fabric_format.disableAdaptiveTiming()  // Return to fixed delays
-window.__fabric_format.getAdaptiveStats()       // View session statistics
-```
+4. **Pre-scanning approaches all have UX problems**: Any approach that scans ahead visibly disrupts the user's view.
 
-### How It Works
+### Validated Improvements
 
-When enabled:
-- **Scroll delay**: Starts at 50ms (vs 100ms default)
-- **Focus delay**: Starts at 25ms (vs 50ms default)
+The timing constants were reduced and validated:
+- `SCROLL_SETTLE_MS`: 100ms → **50ms** ✅
+- `DOM_SETTLE_MS`: 50ms → **25ms** ✅
 
-This is a ~50% reduction in fixed delays. The stability loop remains unchanged as the safety net.
+These values were tested on a 26-cell notebook - all char counts matched the baseline exactly.
 
-### Expected Results
+### Why CSP Blocks Us
 
-If most cells work with shorter delays:
-- Theoretical time savings: ~50ms per cell × 26 cells = ~1.3s
-- Best case: ~8.7s instead of ~10s (13% improvement)
+Browser extensions' content scripts run in an "isolated world" - they share DOM with the page but have a separate JavaScript context. To access page globals like `window.monaco`, you must inject a script into the page, but Fabric's CSP blocks:
+- Inline scripts (`script-src` doesn't include `'unsafe-inline'`)
+- Blob URLs
+- Any dynamically created script elements
 
-### Risk Mitigation
+This is a fundamental browser security limitation that cannot be bypassed.
 
-The stability loop (which waits for text to stabilize) remains intact. Even with shorter initial delays, the loop will catch cases where Monaco hasn't finished loading content.
+## Original Analysis (for reference)
 
-## Research Findings
+| Phase | Time | % of Total | Status |
+|-------|------|------------|--------|
+| scroll | ~4.3s | 37% | Optimized (50ms delay) |
+| focus | ~3.9s | 34% | Optimized (25ms delay) |
+| stability | ~2.1s | 18% | Already optimal |
+| format | ~1.1s | 9% | Cannot improve (actual work) |
 
-### 1. Monaco Editor API
+## Approaches Investigated
 
-Monaco exposes rich APIs that could bypass DOM extraction entirely:
+### 1. Monaco `getModels()` API (fabric-format-v7qf)
+**Status:** ❌ Blocked by CSP
 
-**Key Methods:**
-- `editor.getModel().getValue()` - Direct text access, no DOM parsing
-- `editor.hasTextFocus()` - Check if editor is ready
+Would have been ideal - instant access to all cell content without DOM parsing. But CSP blocks script injection.
 
-**Key Events:**
-- `onDidChangeModelContent` - Content changed
-- `onDidFocusEditorText` - Focus gained (cursor blinking)
-- `onDidContentSizeChange` - Content dimensions changed
+### 2. Fabric Notebook State Object (fabric-format-gqf5)
+**Status:** ❌ Blocked by CSP
 
-**Challenge:** Content scripts run in an isolated world. We cannot access `window.monaco` directly.
+Same issue - cannot access page JavaScript context.
 
-**Investigation Script:** See `scripts/investigate-monaco-api.js` - paste this into DevTools console on a Fabric notebook to test if Monaco API is accessible.
+### 3. Network Interception (fabric-format-09sx)
+**Status:** ❌ Not viable
 
-### 2. MutationObserver for DOM Readiness
+Content loads offline from memory. By the time webRequest could intercept, the data is already rendered.
 
-Instead of fixed delays, MutationObserver could detect when:
-- `.view-line` elements are created
-- Text spans are populated within view-lines
+### 4. Download `.ipynb` File (fabric-format-ugr6)
+**Status:** ❌ Too slow
 
-**Risk:** MutationObserver fires frequently during Monaco's render, could be noisy.
+Takes 10-20 seconds to download via Fabric API. Much slower than DOM extraction.
 
-### 3. Predictive Pre-loading
+### 5. Format-on-Focus Model (fabric-format-23ho)
+**Status:** ❌ Bad UX
 
-**Concept:** While processing cell N, prepare cell N+1 in the background.
+Only processing visible cells when user scrolls would be confusing and feel broken.
 
-**Risk:** Could confuse Monaco's focus state, causing wrong content to be captured.
+### 6. Parallel Pre-Scanning Cache (fabric-format-8e6o)
+**Status:** ❌ UX problems
 
-### 4. Request Animation Frame Batching
+All pre-scan approaches either:
+- Visibly scroll the view (disruptive)
+- Create visible artifacts (duplicate elements)
+- Require user action (manual trigger worse UX)
 
-Using rAF to sync with browser paint cycles could be more efficient than fixed timeouts.
+## Final Architecture
 
-**Risk:** May not be enough time for Monaco's async text loading.
+The current approach is:
+1. **Scroll to cell** (50ms settle)
+2. **Focus editor** (25ms settle) - triggers Monaco to load content
+3. **Poll for stability** (30ms interval, 3 consecutive stable readings required)
+4. **Format** (actual CPU work)
+5. **Paste result** (25ms settle)
 
-## Approaches NOT Recommended
+The stability polling loop is the key safety mechanism that ensures we never capture partial content.
 
-1. **Reducing stable checks**: The 3-check requirement is critical for accuracy
-2. **Using line count as proxy**: Empty view-lines exist before text loads
-3. **Removing focus delay**: Monaco only loads text content on focus
+## Beads Closed
 
-## How to Test
+- v7qf: Monaco getModels() API bypass
+- gqf5: Fabric notebook data object
+- 09sx: Network interception
+- ugr6: Download and parse ipynb
+- 23ho: Format-on-focus model
+- 8e6o: Parallel pre-scanning cache
 
-1. Build the extension: `npm run build:chromium`
-2. Load in Chrome/Edge as unpacked extension
-3. Open a Fabric notebook
-4. In console: `window.__fabric_format.enableAdaptiveTiming()`
-5. Click "Format All" button
-6. Watch performance metrics in console (filter by ⏱️)
-7. Compare total time with and without adaptive timing
-8. Check for any formatting errors or partial captures
-
-## Success Criteria
-
-- Maintain 100% accuracy (no partial captures)
-- Reduce total time by 20%+ (from ~10s to ~8s for 26 cells)
-- Or prove current approach is already optimal
-
-## Files Changed
-
-- `content.js`: Added adaptive timing infrastructure
-- `PERFORMANCE_RESEARCH.md`: This document
-- `scripts/investigate-monaco-api.js`: Monaco API investigation tool
+All closed as either "blocked by CSP" or "not viable".

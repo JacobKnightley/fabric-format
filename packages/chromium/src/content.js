@@ -16,13 +16,18 @@ import {
 /**
  * Delay constants for DOM operations and polling.
  * These values are tuned for Monaco Editor and Fabric's React-based UI.
+ *
+ * Note on scroll/focus delays: Lower values (50ms/25ms) were validated
+ * to work reliably while being faster than the original (100ms/50ms).
+ * The stability polling loop is the real safety net for content readiness.
+ * See fabric-format-gdkh for performance research details.
  */
 const TIMING = {
   /** Short delay for DOM operations to settle (focus, dispatch events) */
-  DOM_SETTLE_MS: 50,
+  DOM_SETTLE_MS: 25,
 
   /** Delay after scrolling to ensure virtualized content is rendered */
-  SCROLL_SETTLE_MS: 100,
+  SCROLL_SETTLE_MS: 50,
 
   /** Base delay for initialization retry with exponential backoff */
   INIT_RETRY_BASE_MS: 500,
@@ -45,85 +50,6 @@ const TIMING = {
   /** Fast polling interval for Monaco editor line stability checks */
   EDITOR_LINE_POLL_MS: 30,
 };
-
-// ============================================================================
-// Experimental: Adaptive Timing (fabric-format-gdkh)
-// ============================================================================
-
-/**
- * Experimental adaptive timing system.
- * Starts with aggressive (short) delays and increases only on failure.
- * Enable with: window.__fabric_format.enableAdaptiveTiming()
- *
- * Hypothesis: Most cells will work with shorter delays. Only problematic
- * cells (large, at virtualization boundaries) need longer waits.
- */
-let adaptiveTimingEnabled = false;
-
-const ADAPTIVE_TIMING = {
-  scroll: {
-    initial: 50, // Start aggressive (vs 100ms default)
-    increment: 25, // Increase by this amount on retry
-    max: 150, // Never exceed this
-  },
-  focus: {
-    initial: 25, // Start aggressive (vs 50ms default)
-    increment: 25,
-    max: 100,
-  },
-};
-
-/**
- * Session statistics for adaptive timing - tracks successes/failures per delay level.
- * Reset at start of each formatAllCells run.
- */
-const adaptiveStats = {
-  attempts: [],
-  reset() {
-    this.attempts = [];
-  },
-  record(phase, delay, success) {
-    this.attempts.push({ phase, delay, success, time: performance.now() });
-  },
-  summary() {
-    const scrollSuccesses = this.attempts.filter(
-      (a) => a.phase === 'scroll' && a.success,
-    );
-    const scrollFailures = this.attempts.filter(
-      (a) => a.phase === 'scroll' && !a.success,
-    );
-    const avgScrollDelay =
-      scrollSuccesses.length > 0
-        ? scrollSuccesses.reduce((sum, a) => sum + a.delay, 0) /
-          scrollSuccesses.length
-        : 0;
-    return {
-      scrollSuccesses: scrollSuccesses.length,
-      scrollFailures: scrollFailures.length,
-      avgScrollDelay: Math.round(avgScrollDelay),
-    };
-  },
-};
-
-/**
- * Get the scroll delay to use (adaptive or fixed).
- * @returns {number} Delay in milliseconds
- */
-function getScrollDelay() {
-  return adaptiveTimingEnabled
-    ? ADAPTIVE_TIMING.scroll.initial
-    : TIMING.SCROLL_SETTLE_MS;
-}
-
-/**
- * Get the focus delay to use (adaptive or fixed).
- * @returns {number} Delay in milliseconds
- */
-function getFocusDelay() {
-  return adaptiveTimingEnabled
-    ? ADAPTIVE_TIMING.focus.initial
-    : TIMING.DOM_SETTLE_MS;
-}
 
 // ============================================================================
 // Debug Logging
@@ -157,249 +83,6 @@ const log = {
 if (typeof window !== 'undefined') {
   window.__fabric_format = { formatCell };
 }
-
-// Expose adaptive timing controls
-if (typeof window !== 'undefined') {
-  window.__fabric_format.enableAdaptiveTiming = () => {
-    adaptiveTimingEnabled = true;
-    console.log(
-      '[fabric-format] 🧪 Adaptive timing ENABLED - starting with shorter delays',
-    );
-  };
-  window.__fabric_format.disableAdaptiveTiming = () => {
-    adaptiveTimingEnabled = false;
-    console.log(
-      '[fabric-format] 🧪 Adaptive timing DISABLED - using fixed delays',
-    );
-  };
-  window.__fabric_format.getAdaptiveStats = () => adaptiveStats.summary();
-  window.__fabric_format.isAdaptiveTimingEnabled = () => adaptiveTimingEnabled;
-}
-
-// ============================================================================
-// Performance Instrumentation (fabric-format-b3pt)
-// ============================================================================
-
-/**
- * Performance timing instrumentation.
- * Filter in browser console with: ⏱️
- * Enable with: window.__fabric_format.enableTiming()
- * Disable with: window.__fabric_format.disableTiming()
- */
-const PERF_EMOJI = '⏱️';
-let perfTimingEnabled = true; // Always enabled
-let perfSession = null;
-
-const perf = {
-  /** Enable performance timing */
-  enable() {
-    perfTimingEnabled = true;
-    console.log(
-      `${PERF_EMOJI} Performance timing ENABLED - filter console with: ${PERF_EMOJI}`,
-    );
-  },
-
-  /** Disable performance timing */
-  disable() {
-    perfTimingEnabled = false;
-    console.log(`${PERF_EMOJI} Performance timing DISABLED`);
-  },
-
-  /** Start a new timing session (e.g., for formatAllCells) */
-  startSession(name) {
-    if (!perfTimingEnabled) return;
-    perfSession = {
-      name,
-      startTime: performance.now(),
-      marks: [],
-      cells: [],
-      currentCell: null,
-    };
-    console.log(
-      `${PERF_EMOJI} ══════════════════════════════════════════════════`,
-    );
-    console.log(`${PERF_EMOJI} SESSION START: ${name}`);
-    console.log(
-      `${PERF_EMOJI} ══════════════════════════════════════════════════`,
-    );
-  },
-
-  /** Mark a point in time with a label */
-  mark(label) {
-    if (!perfTimingEnabled || !perfSession) return;
-    const elapsed = performance.now() - perfSession.startTime;
-    perfSession.marks.push({ label, elapsed });
-    console.log(`${PERF_EMOJI} [${elapsed.toFixed(1)}ms] ${label}`);
-  },
-
-  /** Start timing a cell */
-  startCell(index, total) {
-    if (!perfTimingEnabled || !perfSession) return;
-    const elapsed = performance.now() - perfSession.startTime;
-    perfSession.currentCell = {
-      index,
-      total,
-      startTime: performance.now(),
-      phases: {},
-    };
-    console.log(
-      `${PERF_EMOJI} ──────────────────────────────────────────────────`,
-    );
-    console.log(
-      `${PERF_EMOJI} [${elapsed.toFixed(1)}ms] CELL ${index}/${total} START`,
-    );
-  },
-
-  /** Mark the start of a phase within a cell */
-  startPhase(phaseName) {
-    if (!perfTimingEnabled || !perfSession?.currentCell) return;
-    perfSession.currentCell.phases[phaseName] = {
-      start: performance.now(),
-      end: null,
-    };
-  },
-
-  /** Mark the end of a phase within a cell */
-  endPhase(phaseName, detail = '') {
-    if (!perfTimingEnabled || !perfSession?.currentCell) return;
-    const phase = perfSession.currentCell.phases[phaseName];
-    if (phase) {
-      phase.end = performance.now();
-      const duration = phase.end - phase.start;
-      const sessionElapsed = performance.now() - perfSession.startTime;
-      const detailStr = detail ? ` (${detail})` : '';
-      console.log(
-        `${PERF_EMOJI} [${sessionElapsed.toFixed(1)}ms] ├─ ${phaseName}: ${duration.toFixed(1)}ms${detailStr}`,
-      );
-    }
-  },
-
-  /** End timing a cell and record result */
-  endCell(result, detail = null, charCount = null) {
-    if (!perfTimingEnabled || !perfSession?.currentCell) return;
-    const cell = perfSession.currentCell;
-    const cellDuration = performance.now() - cell.startTime;
-    const sessionElapsed = performance.now() - perfSession.startTime;
-
-    // Calculate phase breakdown
-    const phaseBreakdown = Object.entries(cell.phases)
-      .filter(([_, p]) => p.end)
-      .map(([name, p]) => `${name}:${(p.end - p.start).toFixed(0)}ms`)
-      .join(', ');
-
-    const detailStr = detail ? ` (${detail})` : '';
-    const charStr = charCount !== null ? ` [${charCount} chars]` : '';
-    console.log(
-      `${PERF_EMOJI} [${sessionElapsed.toFixed(1)}ms] CELL ${cell.index}/${cell.total} END: ${result}${detailStr}${charStr} (${cellDuration.toFixed(1)}ms total)`,
-    );
-    if (phaseBreakdown) {
-      console.log(
-        `${PERF_EMOJI} [${sessionElapsed.toFixed(1)}ms] └─ Phases: ${phaseBreakdown}`,
-      );
-    }
-
-    perfSession.cells.push({
-      index: cell.index,
-      duration: cellDuration,
-      result,
-      phases: { ...cell.phases },
-    });
-    perfSession.currentCell = null;
-  },
-
-  /** End the session and print summary */
-  endSession(stats = {}) {
-    if (!perfTimingEnabled || !perfSession) return;
-    const totalTime = performance.now() - perfSession.startTime;
-
-    console.log(
-      `${PERF_EMOJI} ══════════════════════════════════════════════════`,
-    );
-    console.log(`${PERF_EMOJI} SESSION END: ${perfSession.name}`);
-    console.log(
-      `${PERF_EMOJI} ══════════════════════════════════════════════════`,
-    );
-    console.log(
-      `${PERF_EMOJI} Total time: ${totalTime.toFixed(1)}ms (${(totalTime / 1000).toFixed(2)}s)`,
-    );
-
-    if (perfSession.cells.length > 0) {
-      // Calculate stats
-      const durations = perfSession.cells.map((c) => c.duration);
-      const avg = durations.reduce((a, b) => a + b, 0) / durations.length;
-      const min = Math.min(...durations);
-      const max = Math.max(...durations);
-
-      console.log(`${PERF_EMOJI} Cells processed: ${perfSession.cells.length}`);
-      console.log(
-        `${PERF_EMOJI} Cell timing: avg=${avg.toFixed(0)}ms, min=${min.toFixed(0)}ms, max=${max.toFixed(0)}ms`,
-      );
-
-      // Phase totals
-      const phaseTotals = {};
-      for (const cell of perfSession.cells) {
-        for (const [name, p] of Object.entries(cell.phases)) {
-          if (p.end) {
-            phaseTotals[name] = (phaseTotals[name] || 0) + (p.end - p.start);
-          }
-        }
-      }
-
-      if (Object.keys(phaseTotals).length > 0) {
-        console.log(
-          `${PERF_EMOJI} ──────────────────────────────────────────────────`,
-        );
-        console.log(`${PERF_EMOJI} PHASE BREAKDOWN (total across all cells):`);
-        const sortedPhases = Object.entries(phaseTotals).sort(
-          (a, b) => b[1] - a[1],
-        );
-        for (const [name, total] of sortedPhases) {
-          const pct = ((total / totalTime) * 100).toFixed(1);
-          console.log(
-            `${PERF_EMOJI}   ${name}: ${total.toFixed(0)}ms (${pct}%)`,
-          );
-        }
-      }
-    }
-
-    // Additional stats passed in
-    if (Object.keys(stats).length > 0) {
-      console.log(
-        `${PERF_EMOJI} ──────────────────────────────────────────────────`,
-      );
-      console.log(`${PERF_EMOJI} RESULTS:`);
-      for (const [key, value] of Object.entries(stats)) {
-        console.log(`${PERF_EMOJI}   ${key}: ${value}`);
-      }
-    }
-
-    console.log(
-      `${PERF_EMOJI} ══════════════════════════════════════════════════`,
-    );
-
-    perfSession = null;
-  },
-};
-
-// Expose timing controls
-if (typeof window !== 'undefined') {
-  window.__fabric_format.enableTiming = () => perf.enable();
-  window.__fabric_format.disableTiming = () => perf.disable();
-  window.__fabric_format.perfTimingEnabled = () => perfTimingEnabled;
-}
-
-// Keyboard shortcut to toggle timing (Ctrl+Shift+P for Performance)
-// Works from content script context (isolated from page)
-document.addEventListener('keydown', (e) => {
-  if (e.ctrlKey && e.shiftKey && e.key === 'P') {
-    e.preventDefault();
-    if (perfTimingEnabled) {
-      perf.disable();
-    } else {
-      perf.enable();
-    }
-  }
-});
 
 // ============================================================================
 // Cleanup Management
@@ -506,6 +189,7 @@ function debounce(fn, ms) {
   };
 }
 
+// ============================================================================
 // State
 let pythonInitialized = false;
 let initializationFailed = false;
@@ -1294,22 +978,12 @@ async function sendUndo(editorElement) {
  * Format all cells in the notebook
  */
 async function formatAllCells() {
-  perf.startSession('formatAllCells');
   showOverlay('Initializing...');
 
-  // Reset adaptive timing stats for this session
-  adaptiveStats.reset();
-  if (adaptiveTimingEnabled) {
-    perf.mark('🧪 Adaptive timing ENABLED');
-  }
-
   // Initialize formatters
-  perf.mark('Initializing formatters...');
   const initialized = await initializeFormatters();
-  perf.mark('Formatters initialized');
   if (!initialized) {
     hideOverlay();
-    perf.endSession({ result: 'FAILED - initialization' });
     // Error notification already shown by initializeFormatters
     return;
   }
@@ -1326,8 +1000,6 @@ async function formatAllCells() {
     return;
   }
 
-  perf.mark(`Found ${totalCells} cells`);
-
   // Capture scroll position using the same function we use elsewhere
   const scrollContainer = findScrollContainer();
   const originalScroll = scrollContainer?.scrollTop || 0;
@@ -1342,20 +1014,13 @@ async function formatAllCells() {
   // Single pass: scroll to each cell, extract, format, apply
   for (let i = 0; i < cellContainers.length; i++) {
     const cellContainer = cellContainers[i];
-    perf.startCell(i + 1, totalCells);
     updateOverlay(`Processing cell ${i + 1}/${totalCells}...`);
 
     // Always scroll to ensure full content is rendered (Monaco virtualizes tall cells)
-    perf.startPhase('scroll');
     cellContainer.scrollIntoView({ block: 'center', behavior: 'instant' });
 
-    // Wait a moment for scroll to settle (adaptive or fixed delay)
-    const scrollDelay = getScrollDelay();
-    await new Promise((r) => setTimeout(r, scrollDelay));
-    perf.endPhase(
-      'scroll',
-      adaptiveTimingEnabled ? `${scrollDelay}ms (adaptive)` : '',
-    );
+    // Wait a moment for scroll to settle
+    await new Promise((r) => setTimeout(r, TIMING.SCROLL_SETTLE_MS));
 
     // =========================================================================
     // CRITICAL: Monaco Lazy-Loading Text Stabilization
@@ -1384,27 +1049,19 @@ async function formatAllCells() {
 
     // Find and FOCUS the editor to trigger Monaco to load full content
     // Monaco lazy-loads text content only when the editor has focus
-    perf.startPhase('focus');
     let editor = cellContainer.querySelector('.monaco-editor');
     if (editor) {
       const textarea = editor.querySelector('textarea.inputarea');
       if (textarea) {
         textarea.focus();
-        const focusDelay = getFocusDelay();
-        await new Promise((r) => setTimeout(r, focusDelay));
+        await new Promise((r) => setTimeout(r, TIMING.DOM_SETTLE_MS));
       }
     }
-    perf.endPhase(
-      'focus',
-      adaptiveTimingEnabled ? `${getFocusDelay()}ms (adaptive)` : '',
-    );
 
     // Wait for editor content to stabilize (see critical note above)
     // Optimization (fabric-format-pzt): Early exit + adaptive polling
-    perf.startPhase('stability');
     let lastExtractedText = '';
     let stableChecks = 0;
-    let stabilityLoopCount = 0;
     const startTime = performance.now();
 
     // Early exit check: if content is already loaded (common for visible cells)
@@ -1432,7 +1089,6 @@ async function formatAllCells() {
     let pollInterval = TIMING.EDITOR_LINE_POLL_MS; // Start at 30ms
 
     for (let attempt = 0; attempt < 100 && stableChecks < 3; attempt++) {
-      stabilityLoopCount++;
       await new Promise((r) => setTimeout(r, pollInterval));
 
       // Re-query editor only if disconnected (fabric-format-8hk)
@@ -1471,10 +1127,8 @@ async function formatAllCells() {
         }
       }
     }
-    perf.endPhase('stability', `${stabilityLoopCount} iterations`);
 
     if (!editor) {
-      perf.endCell('skipped', 'no editor');
       _skipped++;
       continue;
     }
@@ -1484,7 +1138,6 @@ async function formatAllCells() {
     const language = mapCellTypeToLanguage(cellType);
 
     if (!language) {
-      perf.endCell('skipped', 'unsupported language');
       _skipped++;
       continue;
     }
@@ -1492,7 +1145,6 @@ async function formatAllCells() {
     // Use the stable extracted text from the loop
     const originalCode = lastExtractedText;
     if (!originalCode.trim()) {
-      perf.endCell('skipped', 'empty code');
       _skipped++;
       continue;
     }
@@ -1501,32 +1153,25 @@ async function formatAllCells() {
     const context = { cellIndex: i + 1, language };
 
     // Format with context
-    perf.startPhase('format');
     const result = formatCell(originalCode, language, context);
-    perf.endPhase('format', language);
 
     if (result.error) {
       log.warn(`Format error on cell ${i + 1}:`, result.error);
       failedCells.push(i + 1);
-      perf.endCell('failed', result.error, originalCode.length);
       failed++;
       continue;
     }
 
     // Optimization (fabric-format-h6v): use result.changed instead of string comparison
     if (!result.changed) {
-      perf.endCell('already-formatted', null, originalCode.length);
       alreadyFormatted++;
       continue;
     }
 
     // Apply the formatted code
-    perf.startPhase('paste');
     const success = await setCodeViaPaste(editor, result.formatted);
-    perf.endPhase('paste', success ? 'success' : 'failed');
     if (!success) {
       failedCells.push(i + 1);
-      perf.endCell('failed', 'paste failed');
       failed++;
       continue;
     }
@@ -1596,15 +1241,11 @@ async function formatAllCells() {
       }
     }
 
-    perf.endCell('formatted', null, result.formatted.length);
     formatted++;
-    perf.startPhase('settle');
     await new Promise((r) => setTimeout(r, TIMING.DOM_SETTLE_MS));
-    perf.endPhase('settle');
   }
 
   // Restore scroll position
-  perf.mark('restoring scroll');
   if (scrollContainer) {
     scrollContainer.scrollTop = originalScroll;
     log.debug('formatAllCells: restored scroll position to', originalScroll);
@@ -1630,19 +1271,6 @@ async function formatAllCells() {
   const message = parts.join(', ') || 'No changes needed';
   const type = failed > 0 ? 'warning' : 'success';
   showNotification(message, type);
-
-  // Include adaptive timing stats if enabled
-  const sessionStats = {
-    formatted,
-    alreadyFormatted,
-    failed,
-    skipped: _skipped,
-  };
-  if (adaptiveTimingEnabled) {
-    const aStats = adaptiveStats.summary();
-    sessionStats.adaptiveTiming = `enabled (avg scroll: ${aStats.avgScrollDelay}ms)`;
-  }
-  perf.endSession(sessionStats);
 }
 
 // ============================================================================
