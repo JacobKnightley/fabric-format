@@ -568,6 +568,29 @@ function formatTokens(
     }
   };
 
+  // Reusable token context object to avoid allocating on every iteration
+  // Properties are updated in place before each use
+  const ctx = {
+    isClauseStart: false,
+    isJoinOn: false,
+    isMergeUsing: false,
+    isMergeOn: false,
+    isMergeWhen: false,
+    isCteMainSelect: false,
+    isSetOperandParen: false,
+    isSubqueryCloseParen: false,
+    isDdlCloseParen: false,
+    isDdlComma: false,
+    isListComma: false,
+    isCteComma: false,
+    isValuesComma: false,
+    isSetComma: false,
+    isConditionOperator: false,
+    isBetweenAnd: false,
+    isSetKeyword: false,
+    isInIdentifierContext: false,
+  };
+
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
 
@@ -647,13 +670,13 @@ function formatTokens(
       continue;
     }
 
-    // Get context from analysis
-    const ctx = getTokenContext(tokenIndex, analysis);
-
     // Compact query tracking: each subquery level is evaluated independently
     // When we hit a SELECT, check if THAT query is compact and push to stack
     const _simpleQueryInfo = analysis.simpleQueries.get(tokenIndex);
-    if (symbolicName === 'SELECT' && ctx.isClauseStart) {
+    if (
+      symbolicName === 'SELECT' &&
+      analysis.clauseStartTokens.has(tokenIndex)
+    ) {
       const isThisQueryCompact = compactQueries.has(tokenIndex);
       // Push compact state for this query level
       state.compactQueryStack.push({
@@ -739,7 +762,6 @@ function formatTokens(
       tokenType,
       text,
       symbolicName,
-      ctx,
       analysis,
       nextTokenType,
     );
@@ -796,6 +818,26 @@ function formatTokens(
       builder.push('AS');
     }
 
+    // Populate reusable token context object (avoids allocation per token)
+    ctx.isClauseStart = analysis.clauseStartTokens.has(tokenIndex);
+    ctx.isJoinOn = analysis.joinOnTokens.has(tokenIndex);
+    ctx.isMergeUsing = analysis.mergeUsingTokens.has(tokenIndex);
+    ctx.isMergeOn = analysis.mergeOnTokens.has(tokenIndex);
+    ctx.isMergeWhen = analysis.mergeWhenTokens.has(tokenIndex);
+    ctx.isCteMainSelect = analysis.cteMainSelectTokens.has(tokenIndex);
+    ctx.isSetOperandParen = analysis.setOperandParens.has(tokenIndex);
+    ctx.isSubqueryCloseParen = analysis.subqueryCloseParens.has(tokenIndex);
+    ctx.isDdlCloseParen = analysis.ddlCloseParens.has(tokenIndex);
+    ctx.isDdlComma = analysis.ddlColumnCommas.has(tokenIndex);
+    ctx.isListComma = analysis.listItemCommas.has(tokenIndex);
+    ctx.isCteComma = analysis.cteCommas.has(tokenIndex);
+    ctx.isValuesComma = analysis.valuesCommas.has(tokenIndex);
+    ctx.isSetComma = analysis.setClauseCommas.has(tokenIndex);
+    ctx.isConditionOperator = analysis.conditionOperators.has(tokenIndex);
+    ctx.isBetweenAnd = analysis.betweenAndTokens.has(tokenIndex);
+    ctx.isSetKeyword = tokenIndex === analysis.setKeywordToken;
+    ctx.isInIdentifierContext = analysis.identifierTokens.has(tokenIndex);
+
     // Determine newlines and indent
     const { needsNewline, indent } = calculateNewlineAndIndent(
       tokenIndex,
@@ -822,7 +864,8 @@ function formatTokens(
     );
 
     // Handle list commas - look ahead for comments
-    if (ctx.isListComma && state.insideFunctionArgs === 0) {
+    const isListComma = analysis.listItemCommas.has(tokenIndex);
+    if (isListComma && state.insideFunctionArgs === 0) {
       const nextIdx = findNextNonWsTokenIndex(i + 1);
       if (nextIdx > 0) {
         collectComments(i + 1, nextIdx);
@@ -831,11 +874,15 @@ function formatTokens(
     }
 
     // Similar look-ahead for other comma types
+    const isCteComma = analysis.cteCommas.has(tokenIndex);
+    const isDdlComma = analysis.ddlColumnCommas.has(tokenIndex);
+    const isValuesComma = analysis.valuesCommas.has(tokenIndex);
+    const isSetComma = analysis.setClauseCommas.has(tokenIndex);
     if (
-      ctx.isCteComma ||
-      ctx.isDdlComma ||
-      ctx.isValuesComma ||
-      ctx.isSetComma ||
+      isCteComma ||
+      isDdlComma ||
+      isValuesComma ||
+      isSetComma ||
       isExpandedFunctionComma
     ) {
       const nextIdx = findNextNonWsTokenIndex(i + 1);
@@ -856,7 +903,7 @@ function formatTokens(
         symbolicName,
         state,
         currentTokenIsUnaryOperator,
-        ctx.isLateralViewComma,
+        analysis.lateralViewCommas.has(tokenIndex),
       );
     }
 
@@ -929,12 +976,18 @@ function formatTokens(
     }
 
     // Track subquery depth changes
-    if (ctx.isSubqueryOpenParen) state.subqueryDepth++;
-    else if (ctx.isSubqueryCloseParen && state.subqueryDepth > 0)
+    if (analysis.subqueryOpenParens.has(tokenIndex)) state.subqueryDepth++;
+    else if (
+      analysis.subqueryCloseParens.has(tokenIndex) &&
+      state.subqueryDepth > 0
+    )
       state.subqueryDepth--;
 
     // Track DDL depth
-    if (ctx.isDdlOpenParen && ctx.isDdlMultiColumn) {
+    if (
+      analysis.ddlOpenParens.has(tokenIndex) &&
+      analysis.ddlMultiColumn.has(tokenIndex)
+    ) {
       builder.push(`\n${'    '.repeat(state.subqueryDepth + 1)}`);
       state.ddlDepth++;
     } else if (ctx.isDdlCloseParen && state.ddlDepth > 0) {
@@ -1071,7 +1124,8 @@ function formatTokens(
       getSymbolicName(nextTokenType) === 'LEFT_PAREN';
 
     // Update previous token tracking
-    state.prevWasFunctionName = ctx.isFunctionCall || isPartitionTransformFunc;
+    state.prevWasFunctionName =
+      analysis.functionCallTokens.has(tokenIndex) || isPartitionTransformFunc;
     state.prevWasBuiltInFunctionKeyword = isBuiltInFunctionKeyword;
     state.isFirstNonWsToken = false;
     state.prevTokenWasUnaryOperator = currentTokenIsUnaryOperator;
@@ -1253,38 +1307,6 @@ function estimateNextInListItemLength(
 }
 
 /**
- * Extract token context from analysis result.
- */
-function getTokenContext(tokenIndex: number, analysis: AnalyzerResult) {
-  return {
-    isInIdentifierContext: analysis.identifierTokens.has(tokenIndex),
-    isInQualifiedName: analysis.qualifiedNameTokens.has(tokenIndex),
-    isFunctionCall: analysis.functionCallTokens.has(tokenIndex),
-    isClauseStart: analysis.clauseStartTokens.has(tokenIndex),
-    isListComma: analysis.listItemCommas.has(tokenIndex),
-    isConditionOperator: analysis.conditionOperators.has(tokenIndex),
-    isBetweenAnd: analysis.betweenAndTokens.has(tokenIndex),
-    isJoinOn: analysis.joinOnTokens.has(tokenIndex),
-    isSubqueryOpenParen: analysis.subqueryOpenParens.has(tokenIndex),
-    isSubqueryCloseParen: analysis.subqueryCloseParens.has(tokenIndex),
-    isSetOperandParen: analysis.setOperandParens.has(tokenIndex),
-    isCteComma: analysis.cteCommas.has(tokenIndex),
-    isCteMainSelect: analysis.cteMainSelectTokens.has(tokenIndex),
-    isDdlComma: analysis.ddlColumnCommas.has(tokenIndex),
-    isDdlOpenParen: analysis.ddlOpenParens.has(tokenIndex),
-    isDdlCloseParen: analysis.ddlCloseParens.has(tokenIndex),
-    isDdlMultiColumn: analysis.ddlMultiColumn.has(tokenIndex),
-    isValuesComma: analysis.valuesCommas.has(tokenIndex),
-    isSetComma: analysis.setClauseCommas.has(tokenIndex),
-    isSetKeyword: tokenIndex === analysis.setKeywordToken,
-    isLateralViewComma: analysis.lateralViewCommas.has(tokenIndex),
-    isMergeUsing: analysis.mergeUsingTokens.has(tokenIndex),
-    isMergeOn: analysis.mergeOnTokens.has(tokenIndex),
-    isMergeWhen: analysis.mergeWhenTokens.has(tokenIndex),
-  };
-}
-
-/**
  * Determine the output text for a token (casing rules).
  */
 function determineOutputText(
@@ -1292,9 +1314,8 @@ function determineOutputText(
   tokenType: number,
   text: string,
   symbolicName: string | null,
-  ctx: ReturnType<typeof getTokenContext>,
   analysis: AnalyzerResult,
-  nextTokenType: number | null, // Added: peek at next token
+  nextTokenType: number | null,
 ): string {
   // SET config tokens - preserve casing
   if (analysis.setConfigTokens.has(tokenIndex)) {
@@ -1307,7 +1328,7 @@ function determineOutputText(
   }
 
   // Function call context
-  if (ctx.isFunctionCall) {
+  if (analysis.functionCallTokens.has(tokenIndex)) {
     const funcLower = text.toLowerCase();
     const isBuiltIn =
       SPARK_BUILTIN_FUNCTIONS.has(funcLower) || isKeywordToken(tokenType, text);
@@ -1346,7 +1367,7 @@ function determineOutputText(
   // Identifier context - preserve casing
   // When a token is marked as identifier by the parse tree, it means the grammar
   // is using it as an identifier (column name, table name, etc.), so preserve casing.
-  if (ctx.isInIdentifierContext) {
+  if (analysis.identifierTokens.has(tokenIndex)) {
     return text;
   }
 
