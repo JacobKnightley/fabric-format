@@ -247,6 +247,7 @@ npm run test:verbose
 **MANDATORY** before ending any work session:
 
 ```bash
+npx biome check . --write  # Format code before committing
 git add .
 git commit -m "Your message"
 git pull --rebase
