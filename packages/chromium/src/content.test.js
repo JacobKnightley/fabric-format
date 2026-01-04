@@ -1399,9 +1399,6 @@ function createMockNotebook(options = {}) {
     });
   }
 
-  // Track current scroll position
-  let currentVisibleStart = 0;
-
   /**
    * Update which cells are "visible" based on scroll position.
    * Phase 1: Scroll brings DOM skeleton into view (empty divs).
@@ -1431,8 +1428,6 @@ function createMockNotebook(options = {}) {
         cellMock.wasEverVisible = true;
       }
     }
-
-    currentVisibleStart = newStart;
   }
 
   /**
