@@ -950,6 +950,31 @@ async function formatAllCells() {
     // Wait a moment for scroll to settle
     await new Promise((r) => setTimeout(r, TIMING.SCROLL_SETTLE_MS));
 
+    // =========================================================================
+    // CRITICAL: Monaco Lazy-Loading Text Stabilization
+    // =========================================================================
+    // DO NOT REMOVE OR SIMPLIFY THIS SECTION without understanding fabric-format-ska.
+    //
+    // Monaco + Fabric lazy-loads cell content in stages:
+    //   1. Cell container exists in DOM (but may be virtualized/empty)
+    //   2. After scroll: .view-line divs are created (but empty!)
+    //   3. After focus: Text spans begin populating ASYNCHRONOUSLY
+    //   4. Text content arrives incrementally over multiple frames
+    //
+    // We MUST wait for text to stabilize because:
+    //   - Line count is NOT a reliable proxy (empty divs exist before text)
+    //   - Text length changes as spans load (100 chars → 150 → 200...)
+    //   - Only full text extraction + comparison detects true completion
+    //
+    // Previous attempts to "optimize" this by reducing checks or using proxies
+    // resulted in partial text capture and corrupted formatting. See:
+    //   - fabric-format-ska: Original bug report
+    //   - fabric-format-ot3: Performance audit with context
+    //
+    // SAFE optimizations: Make extractCodeFromEditor() faster (it's called often)
+    // UNSAFE: Reducing stableChecks, using line count, shortening timeouts
+    // =========================================================================
+
     // Find and FOCUS the editor to trigger Monaco to load full content
     // Monaco lazy-loads text content only when the editor has focus
     let editor = cellContainer.querySelector('.monaco-editor');
@@ -961,22 +986,22 @@ async function formatAllCells() {
       }
     }
 
-    // Wait for editor content to stabilize
-    // Monaco creates .view-line divs first, then populates spans with text LAZILY
-    // We must do FULL text extraction and compare to detect when content is actually ready
+    // Wait for editor content to stabilize (see critical note above)
     let lastExtractedText = '';
     let stableChecks = 0;
     const startTime = performance.now();
 
     for (let attempt = 0; attempt < 100; attempt++) {
-      // Up to 3s total
+      // Up to 3s total (100 * 30ms)
       await new Promise((r) => setTimeout(r, TIMING.EDITOR_LINE_POLL_MS));
+
+      // Re-query editor in case DOM was recreated during virtualization
       editor = cellContainer.querySelector('.monaco-editor');
       if (editor) {
-        // Do full text extraction - this is what we'll actually use
+        // Full text extraction - this is what we'll actually format
         const currentText = extractCodeFromEditor(editor);
 
-        // Text must be non-empty and stable across multiple checks
+        // Text must be non-empty and stable across 3 consecutive checks
         if (currentText.length > 0 && currentText === lastExtractedText) {
           stableChecks++;
           if (stableChecks >= 3) {
@@ -986,6 +1011,7 @@ async function formatAllCells() {
             break;
           }
         } else {
+          // Text changed - reset stability counter
           stableChecks = 0;
           lastExtractedText = currentText;
         }
