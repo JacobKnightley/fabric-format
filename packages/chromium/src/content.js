@@ -891,7 +891,8 @@ async function _formatCurrentCell() {
     return;
   }
 
-  if (result.formatted === originalCode) {
+  // Optimization (fabric-format-h6v): use result.changed instead of string comparison
+  if (!result.changed) {
     showNotification('Already formatted', 'success');
     return;
   }
@@ -1126,7 +1127,8 @@ async function formatAllCells() {
       continue;
     }
 
-    if (result.formatted === originalCode) {
+    // Optimization (fabric-format-h6v): use result.changed instead of string comparison
+    if (!result.changed) {
       alreadyFormatted++;
       continue;
     }
