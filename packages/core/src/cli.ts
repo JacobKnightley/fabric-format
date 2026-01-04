@@ -4,7 +4,9 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   type CellType,
+  detectLanguagesInContent,
   formatCell,
+  initializeFormatters,
   initializePythonFormatter,
 } from './cell-formatter.js';
 import { isSupportedFile } from './file-utils.js';
@@ -457,11 +459,10 @@ async function cmdFormat(args: string[], ctx: CliContext): Promise<void> {
     return;
   }
 
-  // Initialize Python formatter once before processing files
-  await initializePythonFormatter();
+  // Scan files to detect which languages need formatting (lazy init)
+  const languagesNeeded = new Set<string>();
+  const fileContents = new Map<string, string>();
 
-  // Format files in-place
-  let formattedCount = 0;
   for (const file of files) {
     let content: string;
     try {
@@ -481,7 +482,21 @@ async function cmdFormat(args: string[], ctx: CliContext): Promise<void> {
       return; // TypeScript: unreachable but makes control flow analysis happy
     }
 
-    const normalizedContent = normalizeLineEndings(content);
+    fileContents.set(file, normalizeLineEndings(content));
+    // Detect languages in this file
+    for (const lang of detectLanguagesInContent(content)) {
+      languagesNeeded.add(lang);
+    }
+  }
+
+  // Initialize only the formatters we need (parallel)
+  await initializeFormatters(languagesNeeded);
+
+  // Format files in-place
+  let formattedCount = 0;
+  for (const file of files) {
+    const normalizedContent = fileContents.get(file);
+    if (!normalizedContent) continue; // Should never happen
     let formatted: string;
     try {
       formatted = await formatFile(normalizedContent, file);
@@ -592,11 +607,10 @@ async function cmdCheck(args: string[], ctx: CliContext): Promise<void> {
     return;
   }
 
-  // Initialize Python formatter once before processing files
-  await initializePythonFormatter();
+  // Scan files to detect which languages need formatting (lazy init)
+  const languagesNeeded = new Set<string>();
+  const fileContents = new Map<string, string>();
 
-  // Check mode: check without modifying
-  let needsFormatting = false;
   for (const file of files) {
     let content: string;
     try {
@@ -616,6 +630,21 @@ async function cmdCheck(args: string[], ctx: CliContext): Promise<void> {
       return; // TypeScript: unreachable but makes control flow analysis happy
     }
 
+    fileContents.set(file, content);
+    // Detect languages in this file
+    for (const lang of detectLanguagesInContent(content)) {
+      languagesNeeded.add(lang);
+    }
+  }
+
+  // Initialize only the formatters we need (parallel)
+  await initializeFormatters(languagesNeeded);
+
+  // Check mode: check without modifying
+  let needsFormatting = false;
+  for (const file of files) {
+    const content = fileContents.get(file);
+    if (!content) continue; // Should never happen
     let formatted: string;
     try {
       formatted = await formatFile(content, file);

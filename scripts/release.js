@@ -3,9 +3,14 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const readline = require('node:readline');
+const { execSync } = require('node:child_process');
 
 const CORE_PKG = path.join(__dirname, '../packages/core/package.json');
 const CHROMIUM_PKG = path.join(__dirname, '../packages/chromium/package.json');
+const CHROMIUM_MANIFEST = path.join(
+  __dirname,
+  '../packages/chromium/manifest.json',
+);
 const VERSION_FILE = path.join(__dirname, '../VERSION');
 
 function readVersion(pkgPath) {
@@ -107,13 +112,12 @@ async function main() {
     console.log(`  Chromium: ${chromiumVersion} → ${newVersion}`);
     writeVersion(CHROMIUM_PKG, newVersion);
     // Also update manifest.json
-    const manifestPath = path.join(
-      __dirname,
-      '../packages/chromium/manifest.json',
-    );
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const manifest = JSON.parse(fs.readFileSync(CHROMIUM_MANIFEST, 'utf8'));
     manifest.version = newVersion;
-    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    fs.writeFileSync(
+      CHROMIUM_MANIFEST,
+      `${JSON.stringify(manifest, null, 2)}\n`,
+    );
     tags.push(`chromium@${newVersion}`);
   }
 
@@ -123,6 +127,19 @@ async function main() {
   console.log(`  Release ID: ${releaseId} → ${newReleaseId}`);
 
   console.log('\n✅ Version files updated!');
+
+  // Run Biome on modified JSON files to fix formatting (JSON.stringify expands arrays differently)
+  console.log('   Running Biome to fix formatting...');
+  const filesToFormat = [CHROMIUM_PKG, CHROMIUM_MANIFEST];
+  if (releaseCore) filesToFormat.push(CORE_PKG);
+  try {
+    execSync(`npx biome check --write ${filesToFormat.join(' ')}`, {
+      stdio: 'inherit',
+    });
+  } catch {
+    // Biome may exit non-zero if it made changes, that's fine
+  }
+
   console.log(
     `\n   Commit message: release: v${newReleaseId} (${tags.join(', ')})`,
   );

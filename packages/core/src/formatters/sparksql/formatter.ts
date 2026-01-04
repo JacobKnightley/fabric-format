@@ -18,7 +18,6 @@ import antlr4 from 'antlr4';
 import { MAX_LINE_WIDTH } from './constants.js';
 import {
   detectCollapseDirectives,
-  type ForceInlineRange,
   type FormatDirectiveInfo,
   hasFormatOff,
   isFmtInlineComment,
@@ -56,6 +55,114 @@ import {
   SqlBaseLexer,
 } from './token-utils.js';
 import type { AnalyzerResult, ExpandedPivot, ExpandedWindow } from './types.js';
+
+// ============================================================================
+// MODULE-LEVEL CONSTANTS (avoid allocation in hot paths)
+// ============================================================================
+
+/**
+ * Partition transform functions that should be uppercased when followed by '('.
+ * Used in both token loop and determineOutputText.
+ */
+const PARTITION_TRANSFORM_FUNCTIONS = new Set([
+  'BUCKET',
+  'TRUNCATE',
+  'YEAR',
+  'YEARS',
+  'MONTH',
+  'MONTHS',
+  'DAY',
+  'DAYS',
+  'HOUR',
+  'HOURS',
+]);
+
+/**
+ * Structural keywords that should always be uppercase, even in identifier contexts.
+ * These are syntactic markers, not actual identifier names.
+ */
+const STRUCTURAL_KEYWORDS = new Set([
+  'AS',
+  'ON',
+  'AND',
+  'OR',
+  'IN',
+  'FOR',
+  'USING',
+]);
+
+/**
+ * Extension keywords: Should always be uppercase, even in identifier context.
+ * Keywords not in Spark grammar (Delta Lake extensions, etc.).
+ */
+const EXTENSION_KEYWORDS = new Set([
+  'SYSTEM', // SHOW SYSTEM FUNCTIONS
+  'NOSCAN', // ANALYZE TABLE ... NOSCAN
+  'VACUUM',
+  'RETAIN',
+  'RESTORE',
+  'CLONE',
+  'SHALLOW',
+  'DEEP',
+  'OPTIMIZE',
+  'ZORDER',
+]);
+
+// ============================================================================
+// PARSER INSTANCE POOL
+// ============================================================================
+
+/**
+ * Reusable parser/lexer instances for performance.
+ * Creating ANTLR lexer/parser instances has significant overhead (~6x slower).
+ * We maintain a small pool of instances that can be reused across format calls.
+ */
+interface ParserInstance {
+  lexer: InstanceType<typeof SqlBaseLexer>;
+  tokens: antlr4.CommonTokenStream;
+  parser: InstanceType<typeof SqlBaseParser>;
+  inUse: boolean;
+}
+
+const parserPool: ParserInstance[] = [];
+const POOL_SIZE = 4; // Small pool for concurrent formatting
+
+function getParserInstance(): ParserInstance {
+  // Find available instance in pool
+  for (const instance of parserPool) {
+    if (!instance.inUse) {
+      instance.inUse = true;
+      return instance;
+    }
+  }
+
+  // Create new instance if pool not full
+  if (parserPool.length < POOL_SIZE) {
+    const chars = new antlr4.InputStream('');
+    const lexer = new SqlBaseLexer(chars);
+    const tokens = new antlr4.CommonTokenStream(lexer);
+    const parser = new SqlBaseParser(tokens);
+    // @ts-expect-error - ANTLR types incomplete
+    parser.removeErrorListeners?.();
+
+    const instance: ParserInstance = { lexer, tokens, parser, inUse: true };
+    parserPool.push(instance);
+    return instance;
+  }
+
+  // Pool exhausted - create temporary instance (rare case)
+  const chars = new antlr4.InputStream('');
+  const lexer = new SqlBaseLexer(chars);
+  const tokens = new antlr4.CommonTokenStream(lexer);
+  const parser = new SqlBaseParser(tokens);
+  // @ts-expect-error - ANTLR types incomplete
+  parser.removeErrorListeners?.();
+  return { lexer, tokens, parser, inUse: false }; // Not tracked in pool
+}
+
+function releaseParserInstance(instance: ParserInstance): void {
+  instance.inUse = false;
+}
 
 // ============================================================================
 // PUBLIC API
@@ -252,31 +359,58 @@ function normalizeForTokenization(sql: string): string {
 
 /**
  * Format a single SQL statement.
+ *
+ * Uses two-stage parsing for performance:
+ * 1. Try SLL (Simple LL) mode first - faster but may fail on ambiguous input
+ * 2. Fall back to full LL mode only if SLL fails
+ *
+ * Also uses parser instance pooling to avoid expensive lexer/parser construction.
+ *
+ * With caseInsensitive lexer grammar, we only need a single parsing pass.
+ * The lexer matches keywords regardless of case, and token.text preserves
+ * the original casing from the input.
  */
 function formatSingleStatement(sql: string): string {
+  const instance = getParserInstance();
   try {
     // Extract ${variable} substitutions before formatting
     const { sql: sqlWithPlaceholders, substitutions } = extractVariables(sql);
 
-    // Pre-normalize SQL to fix tokenization mismatches
+    // Pre-normalize SQL to fix tokenization mismatches (e.g., scientific notation)
     const normalizedSql = normalizeForTokenization(sqlWithPlaceholders);
 
-    // Parse with uppercased SQL (grammar matches uppercase keywords)
-    const upperSql = normalizedSql.toUpperCase();
-    const chars = new antlr4.InputStream(upperSql);
-    const lexer = new SqlBaseLexer(chars);
-    const tokens = new antlr4.CommonTokenStream(lexer);
-    tokens.fill();
+    // Reset and configure lexer with new input
+    const chars = new antlr4.InputStream(normalizedSql);
+    (instance.lexer as any).inputStream = chars;
+    instance.lexer.reset();
 
-    const parser = new SqlBaseParser(tokens);
-    // @ts-expect-error
-    parser.removeErrorListeners?.();
+    // Reset token stream - must clear tokens array manually
+    const tokenStream = instance.tokens as any;
+    tokenStream.tokens = [];
+    tokenStream.index = -1;
+    tokenStream.fetchedEOF = false;
+    instance.tokens.fill();
 
+    // Reset parser
+    instance.parser.reset();
+
+    // Two-stage parsing: try SLL first (faster), fall back to LL if needed
+    // SLL (Simple LL) avoids full LL(*) lookahead for most inputs
     let tree: any;
     try {
-      tree = parser.singleStatement();
+      // Stage 1: SLL mode (faster, handles most SQL)
+      (instance.parser as any)._interp.predictionMode = 0; // SLL = 0
+      tree = instance.parser.singleStatement();
     } catch {
-      return sql;
+      // Stage 2: Full LL mode (handles ambiguous constructs)
+      (instance.tokens as any).seek(0);
+      instance.parser.reset();
+      (instance.parser as any)._interp.predictionMode = 1; // LL = 1
+      try {
+        tree = instance.parser.singleStatement();
+      } catch {
+        return sql;
+      }
     }
 
     // Analyze parse tree
@@ -284,19 +418,13 @@ function formatSingleStatement(sql: string): string {
     analyzer.visit(tree);
     const analysis = analyzer.getResult();
 
-    // Re-lex normalized SQL to get token texts (now aligned with uppercase stream)
-    const origChars = new antlr4.InputStream(normalizedSql);
-    const origLexer = new SqlBaseLexer(origChars);
-    const origTokens = new antlr4.CommonTokenStream(origLexer);
-    origTokens.fill();
-
     // Detect fmt:collapse directives
     const formatDirectives = detectCollapseDirectives(normalizedSql);
 
-    // Format tokens
+    // Format tokens - with caseInsensitive lexer, tokens.tokens contains
+    // both correct token types AND original text
     const formatted = formatTokens(
-      tokens.tokens,
-      origTokens.tokens,
+      instance.tokens.tokens,
       analysis,
       formatDirectives,
     );
@@ -306,6 +434,8 @@ function formatSingleStatement(sql: string): string {
   } catch (e: any) {
     console.error('Formatter error:', e.message, e.stack);
     return sql;
+  } finally {
+    releaseParserInstance(instance);
   }
 }
 
@@ -313,8 +443,7 @@ function formatSingleStatement(sql: string): string {
  * Format tokens using the analysis result.
  */
 function formatTokens(
-  tokenList: any[],
-  allOrigTokens: any[],
+  tokens: any[],
   analysis: AnalyzerResult,
   formatDirectives: FormatDirectiveInfo,
 ): string {
@@ -328,15 +457,16 @@ function formatTokens(
   let lastProcessedIndex = -1;
 
   // Populate force-inline ranges from fmt:inline comments (grammar-driven approach)
-  const forceInlineRanges = findForceInlineRanges(allOrigTokens, analysis);
+  const forceInlineRanges = findForceInlineRanges(tokens, analysis);
   formatDirectives.forceInlineRanges = forceInlineRanges;
 
   // IN list wrapping state
-  // Maps open paren index -> { wrapIndent, closeParenIndex, commaIndices }
+  // Maps open paren index -> { wrapIndent, closeParenIndex, commaIndices, itemLengths }
   interface ActiveInList {
     wrapIndent: number; // Column to wrap to (after open paren)
     closeParenIndex: number;
     commaIndices: Set<number>;
+    itemLengths: Map<number, number>; // Precomputed: commaIndex -> length of next item
   }
   let activeInList: ActiveInList | null = null;
 
@@ -359,7 +489,7 @@ function formatTokens(
   let isShortSetOperation = false;
   if (analysis.setOperandParens.size > 0) {
     let estimatedQueryLength = 0;
-    for (const tok of tokenList) {
+    for (const tok of tokens) {
       if (tok.type !== SqlBaseLexer.WS && tok.type !== antlr4.Token.EOF) {
         estimatedQueryLength += (tok.text?.length || 0) + 1; // +1 for space
       }
@@ -377,7 +507,7 @@ function formatTokens(
   let isShortValues = false;
   if (analysis.valuesCommas.size > 0 && !analysis.valuesHasTuples) {
     let estimatedQueryLength = 0;
-    for (const tok of tokenList) {
+    for (const tok of tokens) {
       if (tok.type !== SqlBaseLexer.WS && tok.type !== antlr4.Token.EOF) {
         estimatedQueryLength += (tok.text?.length || 0) + 1; // +1 for space
       }
@@ -385,26 +515,34 @@ function formatTokens(
     isShortValues = estimatedQueryLength <= MAX_LINE_WIDTH;
   }
 
-  // Helper to find next non-WS token
-  const findNextNonWsTokenIndex = (startIdx: number): number => {
-    for (let j = startIdx; j < tokenList.length; j++) {
-      const tok = tokenList[j];
-      if (
-        tok.type !== SqlBaseLexer.WS &&
-        tok.type !== antlr4.Token.EOF &&
-        tok.type !== SqlBaseLexer.SIMPLE_COMMENT &&
-        tok.type !== SqlBaseLexer.BRACKETED_COMMENT
-      ) {
-        return j;
-      }
+  // Precompute next non-WS token index for every position (O(n) build, O(1) lookup)
+  // nextNonWsIndex[i] = index of first significant token at or after position i, or -1 if none
+  // This matches the semantics of the original findNextNonWsTokenIndex which starts scanning inclusively
+  const nextNonWsIndex = new Int32Array(tokens.length);
+  let lastNonWs = -1;
+  for (let j = tokens.length - 1; j >= 0; j--) {
+    const tok = tokens[j];
+    if (
+      tok.type !== SqlBaseLexer.WS &&
+      tok.type !== antlr4.Token.EOF &&
+      tok.type !== SqlBaseLexer.SIMPLE_COMMENT &&
+      tok.type !== SqlBaseLexer.BRACKETED_COMMENT
+    ) {
+      lastNonWs = j;
     }
-    return -1;
+    nextNonWsIndex[j] = lastNonWs;
+  }
+
+  // O(1) lookup for next non-WS token index (inclusive of startIdx)
+  const findNextNonWsTokenIndex = (startIdx: number): number => {
+    if (startIdx < 0 || startIdx >= tokens.length) return -1;
+    return nextNonWsIndex[startIdx];
   };
 
   // Helper to collect comments from range
   const collectComments = (startIdx: number, endIdx: number): void => {
     for (let j = startIdx; j < endIdx; j++) {
-      const hiddenToken = allOrigTokens[j];
+      const hiddenToken = tokens[j];
       if (hiddenToken && hiddenToken.channel === 1) {
         if (
           hiddenToken.type === SqlBaseLexer.SIMPLE_COMMENT ||
@@ -413,11 +551,11 @@ function formatTokens(
           const wasOnOwnLine = CommentManager.checkWasOnOwnLine(
             j,
             hiddenToken,
-            allOrigTokens,
+            tokens,
           );
           const hadBlankLineBefore = CommentManager.checkHadBlankLineBefore(
             j,
-            allOrigTokens,
+            tokens,
           );
           comments.add({
             text: hiddenToken.text,
@@ -430,9 +568,31 @@ function formatTokens(
     }
   };
 
-  for (let i = 0; i < tokenList.length && i < allOrigTokens.length; i++) {
-    const token = tokenList[i];
-    const origToken = allOrigTokens[i];
+  // Reusable token context object to avoid allocating on every iteration
+  // Properties are updated in place before each use
+  const ctx = {
+    isClauseStart: false,
+    isJoinOn: false,
+    isMergeUsing: false,
+    isMergeOn: false,
+    isMergeWhen: false,
+    isCteMainSelect: false,
+    isSetOperandParen: false,
+    isSubqueryCloseParen: false,
+    isDdlCloseParen: false,
+    isDdlComma: false,
+    isListComma: false,
+    isCteComma: false,
+    isValuesComma: false,
+    isSetComma: false,
+    isConditionOperator: false,
+    isBetweenAnd: false,
+    isSetKeyword: false,
+    isInIdentifierContext: false,
+  };
+
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
 
     if (token.type === antlr4.Token.EOF) continue;
 
@@ -452,17 +612,13 @@ function formatTokens(
       token.type === SqlBaseLexer.BRACKETED_COMMENT
     ) {
       if (!wasAlreadyProcessed) {
-        const wasOnOwnLine = CommentManager.checkWasOnOwnLine(
-          i,
-          origToken,
-          allOrigTokens,
-        );
+        const wasOnOwnLine = CommentManager.checkWasOnOwnLine(i, token, tokens);
         const hadBlankLineBefore = CommentManager.checkHadBlankLineBefore(
           i,
-          allOrigTokens,
+          tokens,
         );
         comments.add({
-          text: origToken.text,
+          text: token.text,
           type: token.type,
           wasOnOwnLine,
           hadBlankLineBefore,
@@ -471,7 +627,7 @@ function formatTokens(
       continue;
     }
 
-    const text = origToken.text;
+    const text = token.text;
     const tokenType = token.type;
     const tokenIndex = token.tokenIndex;
     const symbolicName = getSymbolicName(tokenType);
@@ -514,13 +670,13 @@ function formatTokens(
       continue;
     }
 
-    // Get context from analysis
-    const ctx = getTokenContext(tokenIndex, analysis);
-
     // Compact query tracking: each subquery level is evaluated independently
     // When we hit a SELECT, check if THAT query is compact and push to stack
     const _simpleQueryInfo = analysis.simpleQueries.get(tokenIndex);
-    if (symbolicName === 'SELECT' && ctx.isClauseStart) {
+    if (
+      symbolicName === 'SELECT' &&
+      analysis.clauseStartTokens.has(tokenIndex)
+    ) {
       const isThisQueryCompact = compactQueries.has(tokenIndex);
       // Push compact state for this query level
       state.compactQueryStack.push({
@@ -592,19 +748,13 @@ function formatTokens(
       state.prevTokenType,
     );
 
-    // Get next token type for lookahead (skip WS tokens)
-    let nextTokenType: number | null = null;
-    for (let j = i + 1; j < tokenList.length; j++) {
-      const nextToken = tokenList[j];
-      if (
-        nextToken.type !== SqlBaseLexer.WS &&
-        nextToken.type !== SqlBaseLexer.SIMPLE_COMMENT &&
-        nextToken.type !== SqlBaseLexer.BRACKETED_COMMENT
-      ) {
-        nextTokenType = nextToken.type;
-        break;
-      }
-    }
+    // Get next token type for lookahead using precomputed index (O(1))
+    // We want the next non-WS token AFTER position i, so look up i+1
+    const nextNonWsIdx = i + 1 < tokens.length ? nextNonWsIndex[i + 1] : -1;
+    const nextTokenType =
+      nextNonWsIdx >= 0 && nextNonWsIdx < tokens.length
+        ? tokens[nextNonWsIdx].type
+        : null;
 
     // Determine output text
     const outputText = determineOutputText(
@@ -612,7 +762,6 @@ function formatTokens(
       tokenType,
       text,
       symbolicName,
-      ctx,
       analysis,
       nextTokenType,
     );
@@ -669,6 +818,26 @@ function formatTokens(
       builder.push('AS');
     }
 
+    // Populate reusable token context object (avoids allocation per token)
+    ctx.isClauseStart = analysis.clauseStartTokens.has(tokenIndex);
+    ctx.isJoinOn = analysis.joinOnTokens.has(tokenIndex);
+    ctx.isMergeUsing = analysis.mergeUsingTokens.has(tokenIndex);
+    ctx.isMergeOn = analysis.mergeOnTokens.has(tokenIndex);
+    ctx.isMergeWhen = analysis.mergeWhenTokens.has(tokenIndex);
+    ctx.isCteMainSelect = analysis.cteMainSelectTokens.has(tokenIndex);
+    ctx.isSetOperandParen = analysis.setOperandParens.has(tokenIndex);
+    ctx.isSubqueryCloseParen = analysis.subqueryCloseParens.has(tokenIndex);
+    ctx.isDdlCloseParen = analysis.ddlCloseParens.has(tokenIndex);
+    ctx.isDdlComma = analysis.ddlColumnCommas.has(tokenIndex);
+    ctx.isListComma = analysis.listItemCommas.has(tokenIndex);
+    ctx.isCteComma = analysis.cteCommas.has(tokenIndex);
+    ctx.isValuesComma = analysis.valuesCommas.has(tokenIndex);
+    ctx.isSetComma = analysis.setClauseCommas.has(tokenIndex);
+    ctx.isConditionOperator = analysis.conditionOperators.has(tokenIndex);
+    ctx.isBetweenAnd = analysis.betweenAndTokens.has(tokenIndex);
+    ctx.isSetKeyword = tokenIndex === analysis.setKeywordToken;
+    ctx.isInIdentifierContext = analysis.identifierTokens.has(tokenIndex);
+
     // Determine newlines and indent
     const { needsNewline, indent } = calculateNewlineAndIndent(
       tokenIndex,
@@ -695,7 +864,8 @@ function formatTokens(
     );
 
     // Handle list commas - look ahead for comments
-    if (ctx.isListComma && state.insideFunctionArgs === 0) {
+    const isListComma = analysis.listItemCommas.has(tokenIndex);
+    if (isListComma && state.insideFunctionArgs === 0) {
       const nextIdx = findNextNonWsTokenIndex(i + 1);
       if (nextIdx > 0) {
         collectComments(i + 1, nextIdx);
@@ -704,11 +874,15 @@ function formatTokens(
     }
 
     // Similar look-ahead for other comma types
+    const isCteComma = analysis.cteCommas.has(tokenIndex);
+    const isDdlComma = analysis.ddlColumnCommas.has(tokenIndex);
+    const isValuesComma = analysis.valuesCommas.has(tokenIndex);
+    const isSetComma = analysis.setClauseCommas.has(tokenIndex);
     if (
-      ctx.isCteComma ||
-      ctx.isDdlComma ||
-      ctx.isValuesComma ||
-      ctx.isSetComma ||
+      isCteComma ||
+      isDdlComma ||
+      isValuesComma ||
+      isSetComma ||
       isExpandedFunctionComma
     ) {
       const nextIdx = findNextNonWsTokenIndex(i + 1);
@@ -729,7 +903,7 @@ function formatTokens(
         symbolicName,
         state,
         currentTokenIsUnaryOperator,
-        ctx.isLateralViewComma,
+        analysis.lateralViewCommas.has(tokenIndex),
       );
     }
 
@@ -738,13 +912,8 @@ function formatTokens(
     // Handle IN list wrapping: after outputting a comma in an IN list,
     // check if the next item would exceed line width
     if (activeInList?.commaIndices.has(tokenIndex) && text === ',') {
-      // Look ahead to estimate the length of the next item
-      const nextItemLength = estimateNextInListItemLength(
-        tokenList,
-        i,
-        findNextNonWsTokenIndex,
-        activeInList.closeParenIndex,
-      );
+      // Use precomputed item length (O(1) lookup instead of O(k) walk)
+      const nextItemLength = activeInList.itemLengths.get(tokenIndex) ?? 0;
       const currentCol = builder.getColumn();
 
       // Add 1 for the space after comma
@@ -778,7 +947,8 @@ function formatTokens(
       activeInList = {
         wrapIndent,
         closeParenIndex: inListInfo.closeParenIndex,
-        commaIndices: new Set(inListInfo.commaIndices),
+        commaIndices: inListInfo.commaIndices, // Already a Set
+        itemLengths: inListInfo.itemLengths, // Precomputed lengths
       };
     }
 
@@ -802,12 +972,18 @@ function formatTokens(
     }
 
     // Track subquery depth changes
-    if (ctx.isSubqueryOpenParen) state.subqueryDepth++;
-    else if (ctx.isSubqueryCloseParen && state.subqueryDepth > 0)
+    if (analysis.subqueryOpenParens.has(tokenIndex)) state.subqueryDepth++;
+    else if (
+      analysis.subqueryCloseParens.has(tokenIndex) &&
+      state.subqueryDepth > 0
+    )
       state.subqueryDepth--;
 
     // Track DDL depth
-    if (ctx.isDdlOpenParen && ctx.isDdlMultiColumn) {
+    if (
+      analysis.ddlOpenParens.has(tokenIndex) &&
+      analysis.ddlMultiColumn.has(tokenIndex)
+    ) {
       builder.push(`\n${'    '.repeat(state.subqueryDepth + 1)}`);
       state.ddlDepth++;
     } else if (ctx.isDdlCloseParen && state.ddlDepth > 0) {
@@ -816,14 +992,14 @@ function formatTokens(
 
     // Handle multi-arg function expansion
     // Check if this token is force-inline (either line-based legacy or grammar-driven)
-    const tokenLine = allOrigTokens[i]?.line || 0;
+    const tokenLine = tokens[i]?.line || 0;
     const lineBasedForceCollapse =
       formatDirectives.collapsedLines.has(tokenLine);
-    const grammarBasedForceCollapse = isForceInlineOpen(
-      tokenIndex,
-      forceInlineRanges,
-    );
-    const forceCollapse = lineBasedForceCollapse || grammarBasedForceCollapse;
+    const grammarBasedForceCollapse = forceInlineRanges.has(tokenIndex);
+    // Suppress function expansion when inside IN list - IN list wrapping handles layout
+    const insideInList = activeInList !== null;
+    const forceCollapse =
+      lineBasedForceCollapse || grammarBasedForceCollapse || insideInList;
 
     if (
       multiArgFuncInfo &&
@@ -834,7 +1010,7 @@ function formatTokens(
         builder,
         expandedFuncs,
         multiArgFuncInfo,
-        tokenList,
+        tokens,
         i,
         findNextNonWsTokenIndex,
         analysis,
@@ -873,10 +1049,10 @@ function formatTokens(
     ) {
       currentExpandedPivot = {
         closeParenIndex: pivotInfoLookup.closeParenIndex,
-        aggregateCommaIndices: new Set(pivotInfoLookup.aggregateCommaIndices),
+        aggregateCommaIndices: pivotInfoLookup.aggregateCommaIndices, // Already a Set
         forKeywordIndex: pivotInfoLookup.forKeywordIndex,
         inKeywordIndex: pivotInfoLookup.inKeywordIndex,
-        inListCommaIndices: new Set(pivotInfoLookup.inListCommaIndices),
+        inListCommaIndices: pivotInfoLookup.inListCommaIndices, // Already a Set
         depth: state.subqueryDepth,
         openingColumn: builder.getColumn() - 1,
       };
@@ -938,25 +1114,14 @@ function formatTokens(
     updateClauseFlags(symbolicName, ctx, state);
 
     // Check if this token is a partition transform function (followed by paren)
-    const partitionTransformFunctions = new Set([
-      'BUCKET',
-      'TRUNCATE',
-      'YEAR',
-      'YEARS',
-      'MONTH',
-      'MONTHS',
-      'DAY',
-      'DAYS',
-      'HOUR',
-      'HOURS',
-    ]);
     const isPartitionTransformFunc =
-      partitionTransformFunctions.has(text.toUpperCase()) &&
+      PARTITION_TRANSFORM_FUNCTIONS.has(text.toUpperCase()) &&
       nextTokenType !== null &&
       getSymbolicName(nextTokenType) === 'LEFT_PAREN';
 
     // Update previous token tracking
-    state.prevWasFunctionName = ctx.isFunctionCall || isPartitionTransformFunc;
+    state.prevWasFunctionName =
+      analysis.functionCallTokens.has(tokenIndex) || isPartitionTransformFunc;
     state.prevWasBuiltInFunctionKeyword = isBuiltInFunctionKeyword;
     state.isFirstNonWsToken = false;
     state.prevTokenWasUnaryOperator = currentTokenIsUnaryOperator;
@@ -978,33 +1143,28 @@ function formatTokens(
 
 /**
  * Scan tokens for fmt:inline comments and find their enclosing expressions.
- * Returns an array of ForceInlineRange for expressions that should not be expanded.
+ * Returns a Set of open token indices for expressions that should not be expanded.
  *
  * The approach:
  * 1. Find all comment tokens that contain fmt:inline
  * 2. For each such comment, find the immediately preceding token (or same position)
  * 3. Check if that token is within any multi-arg function, window def, or pivot
- * 4. If so, add that construct's token range to the force-inline ranges
+ * 4. If so, add that construct's open token index to the set
  */
 function findForceInlineRanges(
-  allOrigTokens: any[],
+  tokens: any[],
   analysis: AnalyzerResult,
-): ForceInlineRange[] {
-  const ranges: ForceInlineRange[] = [];
-  const addedRanges = new Set<string>(); // Avoid duplicates: "open-close"
+): Set<number> {
+  const forceInlineOpenIndices = new Set<number>();
 
-  // Helper to add a range if not already added
-  const addRange = (openIdx: number, closeIdx: number) => {
-    const key = `${openIdx}-${closeIdx}`;
-    if (!addedRanges.has(key)) {
-      addedRanges.add(key);
-      ranges.push({ openTokenIndex: openIdx, closeTokenIndex: closeIdx });
-    }
+  // Helper to add an open index to the set
+  const addRange = (openIdx: number) => {
+    forceInlineOpenIndices.add(openIdx);
   };
 
   // Scan all tokens for fmt:inline comments
-  for (let i = 0; i < allOrigTokens.length; i++) {
-    const token = allOrigTokens[i];
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
     if (!token) continue;
 
     // Check if this is a comment with fmt:inline
@@ -1017,7 +1177,7 @@ function findForceInlineRanges(
         // Find the closest preceding non-WS, non-comment token
         let precedingTokenIdx = i - 1;
         while (precedingTokenIdx >= 0) {
-          const prevToken = allOrigTokens[precedingTokenIdx];
+          const prevToken = tokens[precedingTokenIdx];
           if (
             prevToken &&
             prevToken.type !== SqlBaseLexer.WS &&
@@ -1036,11 +1196,11 @@ function findForceInlineRanges(
             precedingTokenIdx >= openIdx &&
             precedingTokenIdx <= info.closeParenIndex
           ) {
-            addRange(openIdx, info.closeParenIndex);
+            addRange(openIdx);
           }
           // Also check if comment is right after close paren (common placement)
           if (precedingTokenIdx === info.closeParenIndex) {
-            addRange(openIdx, info.closeParenIndex);
+            addRange(openIdx);
           }
         }
 
@@ -1050,10 +1210,10 @@ function findForceInlineRanges(
             precedingTokenIdx >= openIdx &&
             precedingTokenIdx <= info.closeParenIndex
           ) {
-            addRange(openIdx, info.closeParenIndex);
+            addRange(openIdx);
           }
           if (precedingTokenIdx === info.closeParenIndex) {
-            addRange(openIdx, info.closeParenIndex);
+            addRange(openIdx);
           }
         }
 
@@ -1063,110 +1223,17 @@ function findForceInlineRanges(
             precedingTokenIdx >= openIdx &&
             precedingTokenIdx <= info.closeParenIndex
           ) {
-            addRange(openIdx, info.closeParenIndex);
+            addRange(openIdx);
           }
           if (precedingTokenIdx === info.closeParenIndex) {
-            addRange(openIdx, info.closeParenIndex);
+            addRange(openIdx);
           }
         }
       }
     }
   }
 
-  return ranges;
-}
-
-/**
- * Check if a token index is the opening of a force-inline expression.
- */
-function isForceInlineOpen(
-  tokenIndex: number,
-  ranges: ForceInlineRange[],
-): boolean {
-  return ranges.some((r) => r.openTokenIndex === tokenIndex);
-}
-
-/**
- * Estimate the length of the next item in an IN list.
- * Looks ahead from the current comma to find the next comma or close paren.
- */
-function estimateNextInListItemLength(
-  tokenList: any[],
-  currentIndex: number,
-  findNextNonWsTokenIndex: (idx: number) => number,
-  closeParenIndex: number,
-): number {
-  let length = 0;
-  let idx = findNextNonWsTokenIndex(currentIndex + 1);
-  let depth = 0;
-
-  while (idx >= 0 && idx < tokenList.length) {
-    const token = tokenList[idx];
-    const tokenIndex = token.tokenIndex;
-    const text = token.text || '';
-    const symName = SqlBaseLexer.symbolicNames[token.type];
-
-    // Stop at the close paren of the IN list
-    if (tokenIndex === closeParenIndex) {
-      break;
-    }
-
-    // Track nested parens
-    if (symName === 'LEFT_PAREN') {
-      depth++;
-      length += text.length;
-    } else if (symName === 'RIGHT_PAREN') {
-      if (depth > 0) {
-        depth--;
-        length += text.length;
-      } else {
-        break; // Reached closing paren
-      }
-    } else if (symName === 'COMMA' && depth === 0) {
-      // Found the next comma at top level - this is the end of the item
-      break;
-    } else {
-      length += text.length;
-      // Add space between tokens (rough estimate)
-      length += 1;
-    }
-
-    idx = findNextNonWsTokenIndex(idx + 1);
-  }
-
-  return length;
-}
-
-/**
- * Extract token context from analysis result.
- */
-function getTokenContext(tokenIndex: number, analysis: AnalyzerResult) {
-  return {
-    isInIdentifierContext: analysis.identifierTokens.has(tokenIndex),
-    isInQualifiedName: analysis.qualifiedNameTokens.has(tokenIndex),
-    isFunctionCall: analysis.functionCallTokens.has(tokenIndex),
-    isClauseStart: analysis.clauseStartTokens.has(tokenIndex),
-    isListComma: analysis.listItemCommas.has(tokenIndex),
-    isConditionOperator: analysis.conditionOperators.has(tokenIndex),
-    isBetweenAnd: analysis.betweenAndTokens.has(tokenIndex),
-    isJoinOn: analysis.joinOnTokens.has(tokenIndex),
-    isSubqueryOpenParen: analysis.subqueryOpenParens.has(tokenIndex),
-    isSubqueryCloseParen: analysis.subqueryCloseParens.has(tokenIndex),
-    isSetOperandParen: analysis.setOperandParens.has(tokenIndex),
-    isCteComma: analysis.cteCommas.has(tokenIndex),
-    isCteMainSelect: analysis.cteMainSelectTokens.has(tokenIndex),
-    isDdlComma: analysis.ddlColumnCommas.has(tokenIndex),
-    isDdlOpenParen: analysis.ddlOpenParens.has(tokenIndex),
-    isDdlCloseParen: analysis.ddlCloseParens.has(tokenIndex),
-    isDdlMultiColumn: analysis.ddlMultiColumn.has(tokenIndex),
-    isValuesComma: analysis.valuesCommas.has(tokenIndex),
-    isSetComma: analysis.setClauseCommas.has(tokenIndex),
-    isSetKeyword: tokenIndex === analysis.setKeywordToken,
-    isLateralViewComma: analysis.lateralViewCommas.has(tokenIndex),
-    isMergeUsing: analysis.mergeUsingTokens.has(tokenIndex),
-    isMergeOn: analysis.mergeOnTokens.has(tokenIndex),
-    isMergeWhen: analysis.mergeWhenTokens.has(tokenIndex),
-  };
+  return forceInlineOpenIndices;
 }
 
 /**
@@ -1177,9 +1244,8 @@ function determineOutputText(
   tokenType: number,
   text: string,
   symbolicName: string | null,
-  ctx: ReturnType<typeof getTokenContext>,
   analysis: AnalyzerResult,
-  nextTokenType: number | null, // Added: peek at next token
+  nextTokenType: number | null,
 ): string {
   // SET config tokens - preserve casing
   if (analysis.setConfigTokens.has(tokenIndex)) {
@@ -1192,7 +1258,7 @@ function determineOutputText(
   }
 
   // Function call context
-  if (ctx.isFunctionCall) {
+  if (analysis.functionCallTokens.has(tokenIndex)) {
     const funcLower = text.toLowerCase();
     const isBuiltIn =
       SPARK_BUILTIN_FUNCTIONS.has(funcLower) || isKeywordToken(tokenType, text);
@@ -1202,37 +1268,14 @@ function determineOutputText(
   // Structural keywords that should always be uppercase, even in identifier contexts.
   // These are syntactic markers, not actual identifier names.
   // e.g., "LATERAL VIEW EXPLODE(arr) AS item" - AS is a keyword, not an identifier.
-  const structuralKeywords = new Set([
-    'AS',
-    'ON',
-    'AND',
-    'OR',
-    'IN',
-    'FOR',
-    'USING',
-  ]);
-  if (symbolicName && structuralKeywords.has(symbolicName)) {
+  if (symbolicName && STRUCTURAL_KEYWORDS.has(symbolicName)) {
     return text.toUpperCase();
   }
 
   // Extension keywords: Should always be uppercase, even in identifier context.
   // Keywords not in Spark grammar (Delta Lake extensions).
-  const extensionKeywords = new Set([
-    // Spark SQL extensions not in grammar
-    'SYSTEM', // SHOW SYSTEM FUNCTIONS
-    'NOSCAN', // ANALYZE TABLE ... NOSCAN
-    // Delta Lake keywords (none are in the Apache Spark grammar)
-    'VACUUM',
-    'RETAIN',
-    'RESTORE',
-    'CLONE',
-    'SHALLOW',
-    'DEEP',
-    'OPTIMIZE',
-    'ZORDER',
-  ]);
   const textUpper = text.toUpperCase();
-  if (extensionKeywords.has(textUpper)) {
+  if (EXTENSION_KEYWORDS.has(textUpper)) {
     return textUpper;
   }
 
@@ -1241,19 +1284,7 @@ function determineOutputText(
   // When used as column names (not followed by '('), they should preserve casing.
   // e.g., "PARTITIONED BY (bucket(3, col))" - BUCKET uppercase
   // e.g., "SELECT year FROM t" - year lowercase (it's a column name)
-  const partitionTransformFunctions = new Set([
-    'BUCKET',
-    'TRUNCATE',
-    'YEAR',
-    'YEARS',
-    'MONTH',
-    'MONTHS',
-    'DAY',
-    'DAYS',
-    'HOUR',
-    'HOURS',
-  ]);
-  if (partitionTransformFunctions.has(textUpper)) {
+  if (PARTITION_TRANSFORM_FUNCTIONS.has(textUpper)) {
     // Check if next token is '(' (function call context)
     const isFollowedByParen =
       nextTokenType !== null && getSymbolicName(nextTokenType) === 'LEFT_PAREN';
@@ -1266,7 +1297,7 @@ function determineOutputText(
   // Identifier context - preserve casing
   // When a token is marked as identifier by the parse tree, it means the grammar
   // is using it as an identifier (column name, table name, etc.), so preserve casing.
-  if (ctx.isInIdentifierContext) {
+  if (analysis.identifierTokens.has(tokenIndex)) {
     return text;
   }
 

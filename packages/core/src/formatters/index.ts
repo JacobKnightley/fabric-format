@@ -53,6 +53,17 @@ class DefaultFormatterRegistry implements FormatterRegistry {
     );
     await Promise.all(promises);
   }
+
+  async initializeLanguages(languages: Set<string>): Promise<void> {
+    const promises: Promise<void>[] = [];
+    for (const lang of languages) {
+      const formatter = this.formatters.get(lang.toLowerCase());
+      if (formatter && !formatter.isReady()) {
+        promises.push(formatter.initialize());
+      }
+    }
+    await Promise.all(promises);
+  }
 }
 
 /** Global formatter registry */

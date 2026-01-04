@@ -111,6 +111,32 @@ export const whereTests: TestSuite = {
       input: 'select * from t where x like some (a, b, c)',
       expected: 'SELECT * FROM t WHERE x LIKE SOME (a, b, c)',
     },
+
+    // === IN list with nested functions (regression test for fabric-format-9c5) ===
+    {
+      name: 'IN list with nested CAST expressions preserves structure',
+      // Each CAST(CONV(...)) is ~52 chars. Together they fit under 140 with proper wrapping.
+      // Function expansion should NOT break CAST mid-expression.
+      input:
+        "SELECT a, b FROM t WHERE id IN (CAST(CONV(RIGHT(MD5('msit'), 16), 16, -10) AS BIGINT), CAST(CONV(RIGHT(MD5('prod'), 16), 16, -10) AS BIGINT))",
+      expected:
+        "SELECT\n     a\n    ,b\nFROM t\nWHERE id IN (CAST(CONV(RIGHT(MD5('msit'), 16), 16, -10) AS BIGINT), CAST(CONV(RIGHT(MD5('prod'), 16), 16, -10) AS BIGINT))",
+    },
+    {
+      name: 'IN list with deeply nested functions stays inline when under line width',
+      input:
+        'SELECT a, b FROM t WHERE x IN (UPPER(TRIM(col1)), LOWER(TRIM(col2)))',
+      expected:
+        'SELECT\n     a\n    ,b\nFROM t\nWHERE x IN (UPPER(TRIM(col1)), LOWER(TRIM(col2)))',
+    },
+    {
+      name: 'IN list with function containing multiple args stays intact',
+      // COALESCE has commas inside, but those should not be treated as IN list separators
+      input:
+        "SELECT a, b FROM t WHERE x IN (COALESCE(a, b, 'default'), COALESCE(c, d, 'other'))",
+      expected:
+        "SELECT\n     a\n    ,b\nFROM t\nWHERE x IN (COALESCE(a, b, 'default'), COALESCE(c, d, 'other'))",
+    },
   ],
 };
 

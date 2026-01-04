@@ -77,21 +77,13 @@ export interface TokenContext {
 }
 
 /**
- * Check if a token index is inside an IN list.
+ * Check if a token index is an IN list comma using precomputed set (O(1)).
  */
 export function isInListComma(
   tokenIndex: number,
   analysis: AnalyzerResult,
 ): boolean {
-  for (const [_, inListInfo] of analysis.inListInfo) {
-    const isAfterOpen = tokenIndex > inListInfo.openParenIndex;
-    const isBeforeClose = tokenIndex < inListInfo.closeParenIndex;
-    const isComma = inListInfo.commaIndices.includes(tokenIndex);
-    if (isAfterOpen && isBeforeClose && isComma) {
-      return true;
-    }
-  }
-  return false;
+  return analysis.allInListCommas.has(tokenIndex);
 }
 
 /**

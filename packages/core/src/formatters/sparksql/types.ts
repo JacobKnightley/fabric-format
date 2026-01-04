@@ -48,13 +48,13 @@ export interface PivotInfo {
   /** Closing RIGHT_PAREN token index */
   closeParenIndex: number;
   /** Comma indices in the aggregates list (before FOR) */
-  aggregateCommaIndices: number[];
+  aggregateCommaIndices: Set<number>;
   /** FOR keyword token index */
   forKeywordIndex: number | null;
   /** IN keyword token index */
   inKeywordIndex: number | null;
   /** Comma indices in the IN list */
-  inListCommaIndices: number[];
+  inListCommaIndices: Set<number>;
   /** Total span length for line width calculation */
   spanLength: number;
   /** Whether this is UNPIVOT (vs PIVOT) */
@@ -70,9 +70,11 @@ export interface InListInfo {
   /** Closing RIGHT_PAREN token index */
   closeParenIndex: number;
   /** Comma indices in the IN list */
-  commaIndices: number[];
+  commaIndices: Set<number>;
   /** Whether this is inside a PIVOT clause */
   isInPivot: boolean;
+  /** Precomputed item lengths: itemLengths[i] = length of item after comma i (or first item if i=-1) */
+  itemLengths: Map<number, number>;
 }
 
 /**
@@ -178,6 +180,9 @@ export interface AnalyzerResult {
 
   // IN list wrapping (WHERE IN and PIVOT IN)
   inListInfo: Map<number, InListInfo>;
+
+  // Pre-computed set of all IN list comma token indices for O(1) lookup
+  allInListCommas: Set<number>;
 
   // Simple query compaction
   simpleQueries: Map<number, SimpleQueryInfo>;

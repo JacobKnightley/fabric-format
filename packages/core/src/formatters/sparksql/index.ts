@@ -23,7 +23,6 @@ export { getSqlFormatter, isSqlCode, SqlFormatter } from './sql-formatter.js';
 
 export {
   detectCollapseDirectives,
-  type ForceInlineRange,
   type FormatDirectiveInfo,
   hasCollapseDirective,
   hasFormatOff,

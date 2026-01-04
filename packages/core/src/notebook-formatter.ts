@@ -604,17 +604,29 @@ export function parseNotebook(
 }
 
 /**
- * Replace a cell's content in the file.
+ * Represents a cell replacement to be applied.
  */
-function replaceCell(
-  fileContent: string,
+interface CellReplacement {
+  /** Start line index (0-based) of the range to replace */
+  startLine: number;
+  /** End line index (0-based, inclusive) of the range to replace */
+  endLine: number;
+  /** New lines to insert in place of the original range */
+  newLines: string[];
+}
+
+/**
+ * Compute new lines for a cell replacement (handles MAGIC prefixes).
+ */
+function computeReplacementLines(
   cell: NotebookCell,
   formattedContent: string,
   config: LanguageConfig,
-): string {
-  const lines = fileContent.split(/\r?\n/);
-
+  originalLines: string[],
+): { startLine: number; newLines: string[] } {
   let newLines: string[];
+  let startLine = cell.contentStartLine;
+
   if (cell.isMagicCell && cell.magicCommand) {
     // For magic cells, prepend the magic command (without trailing whitespace)
     const magicCommandLine = `${config.magicPrefix}%%${cell.magicCommand}`;
@@ -624,28 +636,42 @@ function replaceCell(
     let magicLineIndex = cell.contentStartLine - 1;
     while (
       magicLineIndex >= 0 &&
-      !lines[magicLineIndex].trim().startsWith(`${config.magicPrefix}%%`)
+      !originalLines[magicLineIndex]
+        .trim()
+        .startsWith(`${config.magicPrefix}%%`)
     ) {
       magicLineIndex--;
     }
-
-    const before = lines.slice(
-      0,
-      magicLineIndex >= 0 ? magicLineIndex : cell.contentStartLine,
-    );
-    const after = lines.slice(cell.contentEndLine + 1);
-
-    return [...before, ...newLines, ...after].join(LINE_ENDING);
+    if (magicLineIndex >= 0) {
+      startLine = magicLineIndex;
+    }
   } else {
     newLines = cell.isMagicCell
       ? addMagicPrefix(formattedContent, config)
       : formattedContent.split(/\r?\n/);
-
-    const before = lines.slice(0, cell.contentStartLine);
-    const after = lines.slice(cell.contentEndLine + 1);
-
-    return [...before, ...newLines, ...after].join(LINE_ENDING);
   }
+
+  return { startLine, newLines };
+}
+
+/**
+ * Apply all cell replacements to the lines array in one pass.
+ * Replacements must be sorted by startLine in descending order.
+ */
+function applyReplacements(
+  lines: string[],
+  replacements: CellReplacement[],
+): string[] {
+  // Work on a copy to avoid mutation
+  const result = [...lines];
+
+  // Apply replacements in reverse order (already sorted descending)
+  // This preserves line indices for later replacements
+  for (const { startLine, endLine, newLines } of replacements) {
+    result.splice(startLine, endLine - startLine + 1, ...newLines);
+  }
+
+  return result;
 }
 
 /**
@@ -701,9 +727,9 @@ export async function formatNotebook(
     }
   }
 
-  // Process cells in reverse order (to preserve line numbers)
-  // Keep track of original indices for error context
-  let result = content;
+  // Collect all cell replacements (format cells and gather changes)
+  // Process in reverse order so we can apply replacements without recalculating indices
+  const replacements: CellReplacement[] = [];
   const totalCells = notebook.cells.length;
 
   for (let reverseIdx = 0; reverseIdx < totalCells; reverseIdx++) {
@@ -737,13 +763,18 @@ export async function formatNotebook(
       const formatResult = formatCell(cell.content, 'sparksql', context);
 
       if (formatResult.changed) {
-        // replaceCell will add back MAGIC prefixes if needed
-        result = replaceCell(
-          result,
+        // Compute replacement lines (handles MAGIC prefixes)
+        const { startLine, newLines } = computeReplacementLines(
           cell,
           formatResult.formatted,
           notebook.config,
+          notebook.lines,
         );
+        replacements.push({
+          startLine,
+          endLine: cell.contentEndLine,
+          newLines,
+        });
         stats.sparkSqlCellsFormatted++;
       }
 
@@ -755,13 +786,18 @@ export async function formatNotebook(
       const formatResult = formatCell(cell.content, 'python', context);
 
       if (formatResult.changed) {
-        // replaceCell will add back MAGIC prefixes if needed
-        result = replaceCell(
-          result,
+        // Compute replacement lines (handles MAGIC prefixes)
+        const { startLine, newLines } = computeReplacementLines(
           cell,
           formatResult.formatted,
           notebook.config,
+          notebook.lines,
         );
+        replacements.push({
+          startLine,
+          endLine: cell.contentEndLine,
+          newLines,
+        });
         stats.pythonCellsFormatted++;
       }
 
@@ -773,5 +809,11 @@ export async function formatNotebook(
     }
   }
 
-  return { content: result, stats };
+  // Apply all replacements in one pass (already sorted descending by startLine)
+  if (replacements.length > 0) {
+    const resultLines = applyReplacements(notebook.lines, replacements);
+    return { content: resultLines.join(LINE_ENDING), stats };
+  }
+
+  return { content, stats };
 }

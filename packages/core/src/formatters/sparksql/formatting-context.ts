@@ -390,6 +390,37 @@ export class IndentCalculator {
  * Determines if a +/-/~ operator is unary based on previous token.
  * Tilde (~) is always unary (bitwise NOT), while +/- depend on context.
  */
+
+// Module-level Set to avoid allocating on every isUnaryOperator call
+const EXPECTS_EXPRESSION = new Set([
+  'SELECT',
+  'WHERE',
+  'HAVING',
+  'ON',
+  'AND',
+  'OR',
+  'WHEN',
+  'THEN',
+  'ELSE',
+  'RETURN',
+  'CASE',
+  'EQ',
+  'NEQ',
+  'LT',
+  'LTE',
+  'GT',
+  'GTE',
+  'NSEQ',
+  'PLUS',
+  'MINUS',
+  'ASTERISK',
+  'SLASH',
+  'PERCENT',
+  'DIV',
+  'AS',
+  'SET',
+]);
+
 export function isUnaryOperator(
   text: string,
   prevTokenText: string,
@@ -415,36 +446,7 @@ export function isUnaryOperator(
     prevTokenType >= 0 ? getSymbolicName(prevTokenType) : null;
   if (!prevSymbolic) return false;
 
-  const expectsExpression = new Set([
-    'SELECT',
-    'WHERE',
-    'HAVING',
-    'ON',
-    'AND',
-    'OR',
-    'WHEN',
-    'THEN',
-    'ELSE',
-    'RETURN',
-    'CASE',
-    'EQ',
-    'NEQ',
-    'LT',
-    'LTE',
-    'GT',
-    'GTE',
-    'NSEQ',
-    'PLUS',
-    'MINUS',
-    'ASTERISK',
-    'SLASH',
-    'PERCENT',
-    'DIV',
-    'AS',
-    'SET',
-  ]);
-
-  return expectsExpression.has(prevSymbolic);
+  return EXPECTS_EXPRESSION.has(prevSymbolic);
 }
 
 /**

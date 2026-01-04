@@ -1,6 +1,6 @@
 {
   "name": "@jacobknightley/fabric-format",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "type": "module",
   "description": "A fast, opinionated formatter for Microsoft Fabric notebooks with Spark SQL and Python support",
   "main": "dist/index.js",
@@ -73,6 +73,9 @@
     "test": "node dist/tests/index.js",
     "test:verbose": "node dist/tests/index.js --verbose",
     "test:coverage": "c8 --reporter=text --reporter=html node dist/tests/index.js",
+    "bench:copy": "node -e \"const fs=require('fs');const p=require('path');function c(s,d){if(!fs.existsSync(d))fs.mkdirSync(d,{recursive:true});fs.readdirSync(s).forEach(f=>{const sp=p.join(s,f),dp=p.join(d,f);fs.statSync(sp).isDirectory()?c(sp,dp):fs.copyFileSync(sp,dp)})}c('src/benchmarks/fixtures','dist/benchmarks/fixtures')\"",
+    "bench": "npm run bench:copy && node dist/benchmarks/run.js",
+    "bench:json": "npm run bench:copy && node dist/benchmarks/run.js --json",
     "format": "node dist/cli.js"
   },
   "devDependencies": {

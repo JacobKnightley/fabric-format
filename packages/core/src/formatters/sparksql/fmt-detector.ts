@@ -13,24 +13,13 @@
 // ============================================================================
 
 /**
- * A token range that should be forced inline (no expansion).
- * Used for fmt:inline directive processing.
- */
-export interface ForceInlineRange {
-  /** Opening token index (e.g., LEFT_PAREN of function) */
-  openTokenIndex: number;
-  /** Closing token index (e.g., RIGHT_PAREN of function) */
-  closeTokenIndex: number;
-}
-
-/**
  * Information about format directives in the SQL.
  */
 export interface FormatDirectiveInfo {
   /** Set of 1-based line numbers with fmt:inline directives (legacy, for backward compat) */
   collapsedLines: Set<number>;
-  /** Token ranges that should be forced inline (grammar-driven approach) */
-  forceInlineRanges: ForceInlineRange[];
+  /** Token indices that should be forced inline - Set of opening token indices */
+  forceInlineRanges: Set<number>;
 }
 
 // ============================================================================
@@ -81,7 +70,7 @@ export function detectCollapseDirectives(sql: string): FormatDirectiveInfo {
     }
   }
 
-  return { collapsedLines, forceInlineRanges: [] };
+  return { collapsedLines, forceInlineRanges: new Set() };
 }
 
 /**
@@ -106,26 +95,4 @@ export function hasCollapseDirective(
  */
 export function isFmtInlineComment(commentText: string): boolean {
   return COLLAPSE_PATTERN.test(commentText);
-}
-
-/**
- * Check if a token index falls within any force-inline range.
- *
- * @param tokenIndex - The token index to check
- * @param ranges - Array of force-inline ranges
- * @returns true if the token is within a force-inline range
- */
-export function isInForceInlineRange(
-  tokenIndex: number,
-  ranges: ForceInlineRange[],
-): boolean {
-  for (const range of ranges) {
-    if (
-      tokenIndex >= range.openTokenIndex &&
-      tokenIndex <= range.closeTokenIndex
-    ) {
-      return true;
-    }
-  }
-  return false;
 }

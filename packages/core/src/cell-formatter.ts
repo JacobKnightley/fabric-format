@@ -164,6 +164,108 @@ export function resetPythonFormatterState(): void {
 }
 
 // ============================================================================
+// Language Detection for Lazy Initialization
+// ============================================================================
+
+/**
+ * Detect which languages are present in notebook content.
+ * Uses fast regex patterns - does NOT parse the full notebook structure.
+ *
+ * This enables lazy initialization: only load formatters for languages actually used.
+ *
+ * @param content Raw notebook file content
+ * @returns Set of language identifiers that need formatting
+ *
+ * @example
+ * ```typescript
+ * const languages = detectLanguagesInContent(notebookContent);
+ * // languages might be Set { 'sql', 'python' }
+ * await initializeFormatters(languages);
+ * ```
+ */
+export function detectLanguagesInContent(content: string): Set<string> {
+  const languages = new Set<string>();
+
+  // Pattern: "language": "xxx" in METADATA blocks
+  const languagePattern = /"language"\s*:\s*"(\w+)"/g;
+  let match = languagePattern.exec(content);
+  while (match !== null) {
+    const lang = match[1].toLowerCase();
+    // Normalize language names
+    if (lang === 'sparksql' || lang === 'sql') {
+      languages.add('sql');
+    } else if (lang === 'python' || lang === 'pyspark') {
+      languages.add('python');
+    } else if (lang === 'scala') {
+      languages.add('scala');
+    } else if (lang === 'r') {
+      languages.add('r');
+    }
+    match = languagePattern.exec(content);
+  }
+
+  // Also check for MAGIC commands (in case metadata is missing)
+  if (content.includes('%%sql')) {
+    languages.add('sql');
+  }
+  if (content.includes('%%python') || content.includes('%%pyspark')) {
+    languages.add('python');
+  }
+  if (content.includes('%%scala')) {
+    languages.add('scala');
+  }
+  if (content.includes('%%r') || content.includes('%%R')) {
+    languages.add('r');
+  }
+
+  return languages;
+}
+
+/**
+ * Initialize formatters for the specified languages in parallel.
+ *
+ * This is the recommended way to initialize formatters when you know
+ * which languages you'll need. Unneeded formatters are not loaded.
+ *
+ * @param languages Set of language identifiers to initialize
+ * @param options Optional WASM options for Python formatter
+ *
+ * @example
+ * ```typescript
+ * // Scan files first
+ * const languages = detectLanguagesInContent(content);
+ *
+ * // Initialize only what's needed (parallel)
+ * await initializeFormatters(languages);
+ *
+ * // Now format cells
+ * formatCell(code, 'python');
+ * ```
+ */
+export async function initializeFormatters(
+  languages: Set<string>,
+  options?: WasmInitOptions,
+): Promise<void> {
+  const promises: Promise<void>[] = [];
+
+  // SQL formatter is synchronous (no init needed)
+  // Python formatter needs async WASM loading
+  if (languages.has('python') && !pythonFormatterReady) {
+    promises.push(initializePythonFormatter(options));
+  }
+
+  // Future: Add scala, r formatters here
+  // if (languages.has('scala')) {
+  //   promises.push(initializeScalaFormatter());
+  // }
+  // if (languages.has('r')) {
+  //   promises.push(initializeRFormatter());
+  // }
+
+  await Promise.all(promises);
+}
+
+// ============================================================================
 // Cell Formatting API
 // ============================================================================
 

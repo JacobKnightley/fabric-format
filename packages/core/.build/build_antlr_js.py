@@ -254,6 +254,35 @@ def download_grammar():
     return True
 
 
+def add_case_insensitive_option(content: str) -> str:
+    """Add caseInsensitive=true option to lexer grammar.
+    
+    ANTLR 4.7+ supports grammar-level case-insensitive matching.
+    This allows the lexer to match 'select', 'SELECT', 'Select' as the same token,
+    while preserving the original text casing in token.text.
+    
+    Without this option, lowercase SQL like 'select a from t' would fail to parse
+    because the Spark grammar defines keywords in uppercase only (SELECT: 'SELECT').
+    """
+    # Check if there's already an options block
+    if re.search(r'options\s*\{', content):
+        # Add to existing options block
+        content = re.sub(
+            r'(options\s*\{)',
+            r'\1\n    caseInsensitive = true;',
+            content
+        )
+    else:
+        # Add new options block after the grammar declaration
+        # Pattern: "lexer grammar SqlBaseLexer;" or "grammar SqlBaseParser;"
+        content = re.sub(
+            r'((?:lexer\s+)?grammar\s+\w+\s*;)',
+            r'\1\n\noptions {\n    caseInsensitive = true;\n}',
+            content
+        )
+    return content
+
+
 def transform_grammar():
     """Transform grammar files for JavaScript ANTLR target."""
     print("\n" + "=" * 60)
@@ -276,6 +305,13 @@ def transform_grammar():
         
         # Transform predicate/action syntax for JavaScript (this.xxx)
         content = transform_predicates_for_js(content)
+        
+        # Add case-insensitive option for the lexer
+        # This is critical: Spark grammar defines keywords uppercase (SELECT: 'SELECT')
+        # but we need to parse lowercase SQL (select a from t)
+        if filename == "SqlBaseLexer.g4":
+            content = add_case_insensitive_option(content)
+            print(f"  {filename}: added caseInsensitive=true option")
         
         # Write transformed grammar back (in-place transformation)
         source_path.write_text(content, encoding='utf-8')

@@ -12,15 +12,7 @@ import {
   shouldAddCommaSpace,
   shouldSkipSpace,
 } from './output-builder.js';
-import { SqlBaseLexer } from './token-utils.js';
-
-/**
- * Get symbolic name from token type.
- */
-function getSymbolicName(tokenType: number): string | null {
-  const name = SqlBaseLexer.symbolicNames[tokenType];
-  return name || null;
-}
+import { getSymbolicName, SqlBaseLexer } from './token-utils.js';
 
 /**
  * Interface for state required by output functions.

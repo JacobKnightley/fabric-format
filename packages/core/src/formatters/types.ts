@@ -115,6 +115,9 @@ export interface FormatterRegistry {
   /** List all registered language identifiers */
   languages(): string[];
 
-  /** Initialize all formatters */
+  /** Initialize all formatters (parallel) */
   initializeAll(): Promise<void>;
+
+  /** Initialize only the specified languages (parallel, lazy) */
+  initializeLanguages(languages: Set<string>): Promise<void>;
 }

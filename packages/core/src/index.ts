@@ -53,11 +53,13 @@ export {
 
 export {
   type CellType,
+  detectLanguagesInContent,
   type FormatCellResult,
   formatCell,
   formatCellAsync,
   formatCellSync,
   getPythonFormatterInitPromise,
+  initializeFormatters,
   initializePythonFormatter,
   isPythonFormatterReady,
   resetPythonFormatterState,

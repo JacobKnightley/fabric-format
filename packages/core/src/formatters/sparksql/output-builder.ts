@@ -15,6 +15,7 @@ import type { PendingComment } from './types.js';
 export class OutputBuilder {
   private output: string[] = [];
   private currentColumn: number = 0;
+  private lastChar: string = '';
 
   /**
    * Push text to output and update column tracking.
@@ -22,6 +23,9 @@ export class OutputBuilder {
   push(text: string): void {
     this.output.push(text);
     this.updateColumn(text);
+    if (text.length > 0) {
+      this.lastChar = text.charAt(text.length - 1);
+    }
   }
 
   /**
@@ -35,9 +39,7 @@ export class OutputBuilder {
    * Get the last character that was output.
    */
   getLastChar(): string {
-    if (this.output.length === 0) return '';
-    const lastStr = this.output[this.output.length - 1];
-    return lastStr.charAt(lastStr.length - 1);
+    return this.lastChar;
   }
 
   /**
