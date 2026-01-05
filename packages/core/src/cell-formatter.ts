@@ -51,11 +51,13 @@ import {
 } from './formatters/index.js';
 import {
   getMarkdownFormatter,
+  type MarkdownFormatterOptions,
   resetMarkdownFormatter,
   type WasmInitOptions as MarkdownWasmInitOptions,
 } from './formatters/markdown/index.js';
 import {
   getPythonFormatter,
+  type PythonFormatterOptions,
   resetPythonFormatter,
   type WasmInitOptions,
 } from './formatters/python/index.js';
@@ -446,7 +448,7 @@ export function formatCell(
 
       const result = pythonFormatter.format(content, {
         stripTrailingNewline: true,
-      } as any);
+      } as PythonFormatterOptions);
 
       return {
         formatted: result.formatted,
@@ -473,7 +475,7 @@ export function formatCell(
 
       const result = markdownFormatter.format(content, {
         stripTrailingNewline: true,
-      } as any);
+      } as MarkdownFormatterOptions);
 
       return {
         formatted: result.formatted,

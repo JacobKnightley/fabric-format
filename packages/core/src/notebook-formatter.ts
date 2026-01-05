@@ -464,14 +464,17 @@ function stripMagicPrefix(line: string, config: LanguageConfig): string {
 function stripMarkdownContentPrefix(
   line: string,
   config: LanguageConfig,
+  trimmedPrefix?: string,
 ): string {
   // Handle lines with content prefix followed by text
   if (line.startsWith(config.markdownContentPrefix)) {
     return line.slice(config.markdownContentPrefix.length);
   }
   // Handle empty markdown lines (just the comment character)
+  // Use pre-computed trimmed prefix if provided for performance
+  const emptyMarker = trimmedPrefix ?? config.markdownContentPrefix.trim();
   const trimmed = line.trim();
-  if (trimmed === config.markdownContentPrefix.trim()) {
+  if (trimmed === emptyMarker) {
     return '';
   }
   return line;
@@ -484,8 +487,9 @@ function addMarkdownContentPrefix(
   content: string,
   config: LanguageConfig,
 ): string[] {
+  const trimmedPrefix = config.markdownContentPrefix.trim();
   return content.split(/\r?\n/).map((line) => {
-    if (line === '') return config.markdownContentPrefix.trim();
+    if (line === '') return trimmedPrefix;
     return config.markdownContentPrefix + line;
   });
 }
@@ -626,8 +630,9 @@ export function parseNotebook(
         if (isMarkdownCell) {
           // Markdown cell: skip header line and strip content prefix
           const contentLines = originalLines.slice(1); // Skip MARKDOWN header
+          const trimmedPrefix = config.markdownContentPrefix.trim();
           content = contentLines
-            .map((l) => stripMarkdownContentPrefix(l, config))
+            .map((l) => stripMarkdownContentPrefix(l, config, trimmedPrefix))
             .join('\n');
           contentStartLine = j + 1;
         } else if (isMagicCell) {
