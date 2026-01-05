@@ -4,7 +4,7 @@
  * Runs all test suites and reports results.
  */
 
-import { formatCell, initializePythonFormatter } from '../cell-formatter.js';
+import { formatCell, initializeMarkdownFormatter, initializePythonFormatter } from '../cell-formatter.js';
 import { formatSql } from '../formatters/sparksql/index.js';
 import {
   printSuiteResult,
@@ -19,6 +19,11 @@ import {
   runErrorPathTests,
   runNotebookParsingTests,
 } from './integration/index.js';
+// Import Markdown test suites
+import {
+  basicFormattingTests as markdownBasicFormattingTests,
+  runInitializationTests as runMarkdownInitializationTests,
+} from './markdown/index.js';
 // Import Python test suites
 import {
   allSparkSqlInPythonTests,
@@ -165,6 +170,9 @@ const pythonSyncSuites = [
   ...allSparkSqlInPythonTests,
 ];
 
+// Markdown test suites (sync tests)
+const markdownSyncSuites = [markdownBasicFormattingTests];
+
 async function main(): Promise<void> {
   console.log('='.repeat(50));
   console.log('Spark SQL Formatter Test Suite');
@@ -248,6 +256,43 @@ async function main(): Promise<void> {
   if (timing)
     console.log(
       `  ⏱ Python tests: ${(performance.now() - pythonTestStart).toFixed(0)}ms`,
+    );
+
+  // Markdown tests header
+  console.log(`\n${'='.repeat(50)}`);
+  console.log('Markdown Formatter Test Suite');
+  console.log('='.repeat(50));
+
+  // Initialize Markdown formatter for tests
+  const markdownInitStart = performance.now();
+  await initializeMarkdownFormatter();
+  if (timing)
+    console.log(
+      `  ⏱ Markdown init: ${(performance.now() - markdownInitStart).toFixed(0)}ms`,
+    );
+
+  // Run Markdown sync tests
+  const markdownTestStart = performance.now();
+  for (const suite of markdownSyncSuites) {
+    const result = runSuite(suite, (code) => {
+      const res = formatCell(code, 'markdown');
+      return res.formatted;
+    });
+    results.push(result);
+    printSuiteResult(result, verbose);
+  }
+
+  // Run Markdown async tests
+  const markdownInitResult = await runMarkdownInitializationTests();
+  results.push({
+    suiteName: 'Markdown Initialization (Async)',
+    passed: markdownInitResult.passed,
+    failed: markdownInitResult.failed,
+    results: [],
+  });
+  if (timing)
+    console.log(
+      `  ⏱ Markdown tests: ${(performance.now() - markdownTestStart).toFixed(0)}ms`,
     );
 
   // Integration tests header

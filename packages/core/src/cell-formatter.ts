@@ -50,6 +50,11 @@ import {
   getFormatterRegistry,
 } from './formatters/index.js';
 import {
+  getMarkdownFormatter,
+  resetMarkdownFormatter,
+  type WasmInitOptions as MarkdownWasmInitOptions,
+} from './formatters/markdown/index.js';
+import {
   getPythonFormatter,
   resetPythonFormatter,
   type WasmInitOptions,
@@ -71,7 +76,7 @@ export interface FormatCellResult {
 }
 
 /** Supported cell types for formatCell */
-export type CellType = 'sparksql' | 'python' | 'pyspark'; // Treated as Python
+export type CellType = 'sparksql' | 'python' | 'pyspark' | 'markdown'; // Includes Markdown
 
 // ============================================================================
 // Python Formatter State
@@ -164,6 +169,90 @@ export function resetPythonFormatterState(): void {
 }
 
 // ============================================================================
+// Markdown Formatter State
+// ============================================================================
+
+/** State for Markdown formatter initialization */
+let markdownFormatterReady = false;
+let markdownFormatterInitPromise: Promise<void> | null = null;
+
+/**
+ * Initialize the Markdown formatter (must be called before formatting Markdown cells).
+ * This is async because the dprint WASM module needs to be loaded.
+ *
+ * This function is idempotent and safe to call concurrently - all callers will
+ * wait for the same initialization promise.
+ *
+ * @param options - Optional WASM initialization options for browser environments.
+ *   - wasmUrl: URL to the .wasm file (use this in Chrome extensions with chrome.runtime.getURL)
+ *   - wasmBinary: WASM binary as ArrayBuffer or Uint8Array (for sync initialization)
+ */
+export async function initializeMarkdownFormatter(
+  options?: MarkdownWasmInitOptions,
+): Promise<void> {
+  // Fast path: already initialized
+  if (markdownFormatterReady) return;
+
+  // If initialization is in progress, wait for it
+  if (markdownFormatterInitPromise) {
+    return markdownFormatterInitPromise;
+  }
+
+  // Create the initialization promise and store it IMMEDIATELY (synchronously)
+  markdownFormatterInitPromise = (async () => {
+    try {
+      // If options provided, reset the formatter to use new options
+      if (options) {
+        resetMarkdownFormatter();
+      }
+
+      // Get or create the formatter with options
+      const markdownFormatter = getMarkdownFormatter(options);
+
+      // Re-register in the registry so formatCell uses the correct instance
+      const registry = getFormatterRegistry();
+      registry.register(markdownFormatter);
+
+      if (!markdownFormatter.isReady()) {
+        await markdownFormatter.initialize();
+      }
+      markdownFormatterReady = true;
+    } catch (error) {
+      // Reset promise on failure so retry is possible
+      markdownFormatterInitPromise = null;
+      throw error;
+    }
+  })();
+
+  return markdownFormatterInitPromise;
+}
+
+/**
+ * Check if Markdown formatter is ready.
+ */
+export function isMarkdownFormatterReady(): boolean {
+  return markdownFormatterReady;
+}
+
+/**
+ * Get the current Markdown initialization promise (for testing/internal use).
+ * Returns null if initialization has not started.
+ */
+export function getMarkdownFormatterInitPromise(): Promise<void> | null {
+  return markdownFormatterInitPromise;
+}
+
+/**
+ * Reset the Markdown formatter state (for testing only).
+ * This allows re-initialization with different options.
+ */
+export function resetMarkdownFormatterState(): void {
+  markdownFormatterReady = false;
+  markdownFormatterInitPromise = null;
+  resetMarkdownFormatter();
+}
+
+// ============================================================================
 // Language Detection for Lazy Initialization
 // ============================================================================
 
@@ -200,6 +289,8 @@ export function detectLanguagesInContent(content: string): Set<string> {
       languages.add('scala');
     } else if (lang === 'r') {
       languages.add('r');
+    } else if (lang === 'markdown' || lang === 'md') {
+      languages.add('markdown');
     }
     match = languagePattern.exec(content);
   }
@@ -216,6 +307,14 @@ export function detectLanguagesInContent(content: string): Set<string> {
   }
   if (content.includes('%%r') || content.includes('%%R')) {
     languages.add('r');
+  }
+  // Check for MARKDOWN cell markers
+  if (
+    content.includes('# MARKDOWN') ||
+    content.includes('// MARKDOWN') ||
+    content.includes('-- MARKDOWN')
+  ) {
+    languages.add('markdown');
   }
 
   return languages;
@@ -252,6 +351,11 @@ export async function initializeFormatters(
   // Python formatter needs async WASM loading
   if (languages.has('python') && !pythonFormatterReady) {
     promises.push(initializePythonFormatter(options));
+  }
+
+  // Markdown formatter needs async WASM loading
+  if (languages.has('markdown') && !markdownFormatterReady) {
+    promises.push(initializeMarkdownFormatter(options as MarkdownWasmInitOptions));
   }
 
   // Future: Add scala, r formatters here
@@ -353,6 +457,33 @@ export function formatCell(
       };
     }
 
+    case 'markdown': {
+      const registry = getFormatterRegistry();
+      const markdownFormatter = registry.get('markdown');
+
+      if (!markdownFormatter?.isReady()) {
+        const baseError =
+          'Markdown formatter not initialized. Call initializeMarkdownFormatter() first.';
+        return {
+          formatted: content,
+          changed: false,
+          error: formatErrorWithContext(baseError, enrichedContext),
+        };
+      }
+
+      const result = markdownFormatter.format(content, {
+        stripTrailingNewline: true,
+      } as any);
+
+      return {
+        formatted: result.formatted,
+        changed: result.changed,
+        error: result.error
+          ? formatErrorWithContext(result.error, enrichedContext)
+          : undefined,
+      };
+    }
+
     default:
       // Unsupported cell type - return unchanged
       return {
@@ -422,6 +553,22 @@ export async function formatCellAsync(
         await pythonFormatterInitPromise;
       } catch (error) {
         const baseError = `Python formatter initialization failed: ${error}`;
+        return {
+          formatted: content,
+          changed: false,
+          error: formatErrorWithContext(baseError, enrichedContext),
+        };
+      }
+    }
+  }
+
+  // For Markdown, wait for initialization if in progress
+  if (type === 'markdown') {
+    if (markdownFormatterInitPromise) {
+      try {
+        await markdownFormatterInitPromise;
+      } catch (error) {
+        const baseError = `Markdown formatter initialization failed: ${error}`;
         return {
           formatted: content,
           changed: false,

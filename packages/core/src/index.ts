@@ -35,12 +35,16 @@ export {
   formatErrorWithContext,
   // Registry
   getFormatterRegistry,
+  getMarkdownFormatter,
   getPythonFormatter,
   getSqlFormatter,
+  isMarkdownCode,
   isPythonCode,
   isSqlCode,
   // Types
   type LanguageFormatter,
+  // Markdown
+  MarkdownFormatter,
   // Python
   PythonFormatter,
   // SQL
@@ -58,10 +62,14 @@ export {
   formatCell,
   formatCellAsync,
   formatCellSync,
+  getMarkdownFormatterInitPromise,
   getPythonFormatterInitPromise,
   initializeFormatters,
+  initializeMarkdownFormatter,
   initializePythonFormatter,
+  isMarkdownFormatterReady,
   isPythonFormatterReady,
+  resetMarkdownFormatterState,
   resetPythonFormatterState,
 } from './cell-formatter.js';
 
@@ -89,6 +97,17 @@ export {
   type RuffFormatConfig,
   type WasmInitOptions,
 } from './formatters/python/index.js';
+
+// ============================================================================
+// Configuration (Markdown/dprint)
+// ============================================================================
+
+export {
+  MARKDOWN_GLOBAL_CONFIG,
+  type MarkdownGlobalConfig,
+  MARKDOWN_PLUGIN_CONFIG,
+  type MarkdownPluginConfig,
+} from './formatters/markdown/index.js';
 
 // ============================================================================
 // Format Directives (Spark SQL)

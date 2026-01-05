@@ -5,9 +5,17 @@
  * Provides a unified interface for formatting any supported language.
  */
 
+import { getMarkdownFormatter, isMarkdownCode } from './markdown/index.js';
 import { getPythonFormatter, isPythonCode } from './python/index.js';
 import { getSqlFormatter, isSqlCode } from './sparksql/index.js';
 import type { FormatterRegistry, LanguageFormatter } from './types.js';
+
+// Re-export Markdown formatter
+export {
+  getMarkdownFormatter,
+  isMarkdownCode,
+  MarkdownFormatter,
+} from './markdown/index.js';
 
 export {
   getPythonFormatter,
@@ -80,6 +88,7 @@ export function getFormatterRegistry(): FormatterRegistry {
     // Register built-in formatters
     registryInstance.register(getSqlFormatter());
     registryInstance.register(getPythonFormatter());
+    registryInstance.register(getMarkdownFormatter());
   }
   return registryInstance;
 }
@@ -110,12 +119,20 @@ export function detectLanguage(cellType: string, code?: string): string {
     ) {
       return 'r';
     }
+    if (
+      firstLine === '%%markdown' ||
+      firstLine.startsWith('%%markdown ') ||
+      firstLine === '%%md'
+    ) {
+      return 'markdown';
+    }
   }
 
   // Fall back to cell type
   const type = cellType.toLowerCase();
   if (isSqlCode(type)) return 'sql';
   if (isPythonCode(type)) return 'python';
+  if (isMarkdownCode(type)) return 'markdown';
 
   return type;
 }

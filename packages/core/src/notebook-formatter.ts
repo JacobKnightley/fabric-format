@@ -63,7 +63,7 @@
  * ```
  */
 
-import { formatCell, initializePythonFormatter } from './cell-formatter.js';
+import { formatCell, initializeMarkdownFormatter, initializePythonFormatter } from './cell-formatter.js';
 
 // Re-export cell-formatter types and functions for convenience
 export {
@@ -71,7 +71,9 @@ export {
   type FormatCellResult,
   formatCell,
   formatCellSync,
+  initializeMarkdownFormatter,
   initializePythonFormatter,
+  isMarkdownFormatterReady,
   isPythonFormatterReady,
 } from './cell-formatter.js';
 
@@ -83,6 +85,10 @@ interface LanguageConfig {
   magicPrefix: string;
   magicSqlCommand: string;
   emptyMagic: string;
+  /** Markdown cell header marker */
+  markdownMarker: string;
+  /** Comment prefix for markdown content lines */
+  markdownContentPrefix: string;
   /** If true, cells can contain raw SQL without MAGIC prefix */
   supportsRawSql: boolean;
   /** Default cell language when no magic command present */
@@ -96,6 +102,8 @@ const PYTHON_CONFIG: LanguageConfig = {
   magicPrefix: '# MAGIC ',
   magicSqlCommand: '# MAGIC %%sql',
   emptyMagic: '# MAGIC ',
+  markdownMarker: '# MARKDOWN ********************',
+  markdownContentPrefix: '# ',
   supportsRawSql: false,
   defaultLanguage: 'python',
 };
@@ -107,6 +115,8 @@ const SCALA_CONFIG: LanguageConfig = {
   magicPrefix: '// MAGIC ',
   magicSqlCommand: '// MAGIC %%sql',
   emptyMagic: '// MAGIC ',
+  markdownMarker: '// MARKDOWN ********************',
+  markdownContentPrefix: '// ',
   supportsRawSql: false,
   defaultLanguage: 'scala',
 };
@@ -118,6 +128,8 @@ const SPARKSQL_CONFIG: LanguageConfig = {
   magicPrefix: '-- MAGIC ',
   magicSqlCommand: '-- MAGIC %%sql',
   emptyMagic: '-- MAGIC ',
+  markdownMarker: '-- MARKDOWN ********************',
+  markdownContentPrefix: '-- ',
   supportsRawSql: true,
   defaultLanguage: 'sparksql',
 };
@@ -144,6 +156,8 @@ export interface NotebookCell {
   isMagicCell: boolean;
   /** Whether this is a raw cell (no MAGIC prefix) */
   isRawCell: boolean;
+  /** Whether this is a markdown cell (MARKDOWN header) */
+  isMarkdownCell: boolean;
   /** The magic command used in the cell (e.g., 'sql', 'pyspark', 'configure'), or null if no magic */
   magicCommand: string | null;
 }
@@ -177,6 +191,8 @@ export interface FormatStats {
   sparkSqlCellsFormatted: number;
   /** Number of Python cells that were formatted */
   pythonCellsFormatted: number;
+  /** Number of Markdown cells that were formatted */
+  markdownCellsFormatted: number;
   /** Number of cells skipped (unsupported languages like Scala, R) */
   cellsSkipped: number;
   /** Non-fatal errors from individual cell formatting (cell content preserved) */
@@ -442,6 +458,39 @@ function stripMagicPrefix(line: string, config: LanguageConfig): string {
 }
 
 /**
+ * Strip markdown content prefix from a line.
+ * For Python: '# ' -> '', '#' (empty line marker) -> ''
+ */
+function stripMarkdownContentPrefix(
+  line: string,
+  config: LanguageConfig,
+): string {
+  // Handle lines with content prefix followed by text
+  if (line.startsWith(config.markdownContentPrefix)) {
+    return line.slice(config.markdownContentPrefix.length);
+  }
+  // Handle empty markdown lines (just the comment character)
+  const trimmed = line.trim();
+  if (trimmed === config.markdownContentPrefix.trim()) {
+    return '';
+  }
+  return line;
+}
+
+/**
+ * Add markdown content prefix to lines.
+ */
+function addMarkdownContentPrefix(
+  content: string,
+  config: LanguageConfig,
+): string[] {
+  return content.split(/\r?\n/).map((line) => {
+    if (line === '') return config.markdownContentPrefix.trim();
+    return config.markdownContentPrefix + line;
+  });
+}
+
+/**
  * Add MAGIC prefix to lines.
  */
 function addMagicPrefix(content: string, config: LanguageConfig): string[] {
@@ -512,6 +561,11 @@ export function parseNotebook(
       if (actualEndLine >= j) {
         const originalLines = lines.slice(j, actualEndLine + 1);
 
+        // Check if this is a markdown cell (starts with MARKDOWN marker)
+        const isMarkdownCell =
+          originalLines.length > 0 &&
+          originalLines[0].trim() === config.markdownMarker;
+
         // Get language from METADATA block (authoritative source)
         const metadataLanguage = parseMetadataLanguage(
           lines,
@@ -521,7 +575,10 @@ export function parseNotebook(
 
         // Map metadata language to our internal language names
         let language: string;
-        if (metadataLanguage === 'sparksql') {
+        if (isMarkdownCell) {
+          // Markdown cells override metadata
+          language = 'markdown';
+        } else if (metadataLanguage === 'sparksql') {
           language = 'sparksql';
         } else if (
           metadataLanguage === 'python' ||
@@ -532,6 +589,8 @@ export function parseNotebook(
           language = 'scala';
         } else if (metadataLanguage === 'r' || metadataLanguage === 'R') {
           language = 'r';
+        } else if (metadataLanguage === 'markdown') {
+          language = 'markdown';
         } else if (metadataLanguage) {
           language = metadataLanguage;
         } else {
@@ -548,20 +607,30 @@ export function parseNotebook(
         );
 
         // Validate that raw cells have a language matching the file type
+        // Skip validation for markdown cells (they always use comment prefix)
         const cellIndex = result.cells.length;
-        validateRawCellLanguage(
-          metadataLanguage,
-          !isMagicCell,
-          config,
-          cellIndex,
-          j,
-        );
+        if (!isMarkdownCell) {
+          validateRawCellLanguage(
+            metadataLanguage,
+            !isMagicCell,
+            config,
+            cellIndex,
+            j,
+          );
+        }
 
         // Extract content
         let content: string;
         let contentStartLine = j;
 
-        if (isMagicCell) {
+        if (isMarkdownCell) {
+          // Markdown cell: skip header line and strip content prefix
+          const contentLines = originalLines.slice(1); // Skip MARKDOWN header
+          content = contentLines
+            .map((l) => stripMarkdownContentPrefix(l, config))
+            .join('\n');
+          contentStartLine = j + 1;
+        } else if (isMagicCell) {
           // Skip the magic command line (%%sql, %%python, etc.)
           const magicCommandIndex = originalLines.findIndex((l) =>
             l.trim().startsWith(`${config.magicPrefix}%%`),
@@ -589,7 +658,8 @@ export function parseNotebook(
           originalLines,
           language,
           isMagicCell,
-          isRawCell: !isMagicCell,
+          isRawCell: !isMagicCell && !isMarkdownCell,
+          isMarkdownCell,
           magicCommand,
         });
       }
@@ -655,6 +725,43 @@ function computeReplacementLines(
 }
 
 /**
+ * Compute new lines for a markdown cell replacement.
+ * Markdown cells have a MARKDOWN header followed by content with comment prefix.
+ */
+function computeMarkdownReplacementLines(
+  cell: NotebookCell,
+  formattedContent: string,
+  config: LanguageConfig,
+  originalLines: string[],
+): { startLine: number; newLines: string[] } {
+  // For markdown cells, we need to:
+  // 1. Keep the MARKDOWN header
+  // 2. Add content prefix to each formatted line
+  let startLine = cell.contentStartLine;
+
+  // Find where the MARKDOWN header is (should be at cell start before content)
+  let markdownHeaderLine = cell.contentStartLine - 1;
+  while (
+    markdownHeaderLine >= 0 &&
+    originalLines[markdownHeaderLine].trim() !== config.markdownMarker
+  ) {
+    markdownHeaderLine--;
+  }
+
+  if (markdownHeaderLine >= 0) {
+    startLine = markdownHeaderLine;
+  }
+
+  // Build new lines: MARKDOWN header + content with prefix
+  const newLines = [
+    config.markdownMarker,
+    ...addMarkdownContentPrefix(formattedContent, config),
+  ];
+
+  return { startLine, newLines };
+}
+
+/**
  * Apply all cell replacements to the lines array in one pass.
  * Replacements must be sorted by startLine in descending order.
  */
@@ -692,6 +799,7 @@ export async function formatNotebook(
   options?: {
     formatSql?: boolean;
     formatPython?: boolean;
+    formatMarkdown?: boolean;
     configPath?: string;
     /** File path for error context (optional) */
     filePath?: string;
@@ -699,11 +807,13 @@ export async function formatNotebook(
 ): Promise<{ content: string; stats: FormatStats }> {
   const formatSparkSqlCells = options?.formatSql ?? true;
   const formatPythonCells = options?.formatPython ?? true;
+  const formatMarkdownCells = options?.formatMarkdown ?? true;
   const filePath = options?.filePath;
 
   const stats: FormatStats = {
     sparkSqlCellsFormatted: 0,
     pythonCellsFormatted: 0,
+    markdownCellsFormatted: 0,
     cellsSkipped: 0,
     errors: [],
   };
@@ -727,6 +837,15 @@ export async function formatNotebook(
     }
   }
 
+  // Initialize Markdown formatter if needed
+  if (formatMarkdownCells) {
+    try {
+      await initializeMarkdownFormatter();
+    } catch (error) {
+      stats.errors.push(`Markdown formatter init failed: ${error}`);
+    }
+  }
+
   // Collect all cell replacements (format cells and gather changes)
   // Process in reverse order so we can apply replacements without recalculating indices
   const replacements: CellReplacement[] = [];
@@ -746,6 +865,7 @@ export async function formatNotebook(
     // Determine if this cell should be formatted based on language and magic command
     // Spark SQL cells: format only if %%sql magic or no magic command
     // Python cells: format only if %%pyspark magic or no magic command
+    // Markdown cells: format if language is markdown
     const magicCmd = cell.magicCommand;
 
     const shouldFormatSparkSql =
@@ -757,6 +877,9 @@ export async function formatNotebook(
       cell.language === 'python' &&
       formatPythonCells &&
       (magicCmd === null || magicCmd === 'pyspark');
+
+    const shouldFormatMarkdown =
+      cell.language === 'markdown' && formatMarkdownCells;
 
     if (shouldFormatSparkSql) {
       // Format using low-level API (cell.content is already stripped of MAGIC prefixes)
@@ -799,6 +922,29 @@ export async function formatNotebook(
           newLines,
         });
         stats.pythonCellsFormatted++;
+      }
+
+      if (formatResult.error) {
+        stats.errors.push(formatResult.error);
+      }
+    } else if (shouldFormatMarkdown) {
+      // Format using low-level API (cell.content is already stripped of comment prefixes)
+      const formatResult = formatCell(cell.content, 'markdown', context);
+
+      if (formatResult.changed) {
+        // Compute replacement lines for markdown (uses comment prefix, not MAGIC)
+        const { startLine, newLines } = computeMarkdownReplacementLines(
+          cell,
+          formatResult.formatted,
+          notebook.config,
+          notebook.lines,
+        );
+        replacements.push({
+          startLine,
+          endLine: cell.contentEndLine,
+          newLines,
+        });
+        stats.markdownCellsFormatted++;
       }
 
       if (formatResult.error) {
