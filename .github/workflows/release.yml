@@ -71,7 +71,7 @@ jobs:
         if: steps.chromium-check.outputs.exists == 'false'
         run: |
           cd packages/chromium
-          zip -r ../../fabric-format-chromium-${{ steps.versions.outputs.chromium }}.zip dist manifest.json README.md PRIVACY.md
+          zip -r ../../fabric-format-chromium-${{ steps.versions.outputs.chromium }}.zip dist icons manifest.json README.md PRIVACY.md
 
       - name: Create GitHub Release for chromium
         if: steps.chromium-check.outputs.exists == 'false'
