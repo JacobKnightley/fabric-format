@@ -84,5 +84,18 @@ The Python formatter uses [Ruff](https://github.com/astral-sh/ruff) WASM for:
 The lint fixes are applied automatically—no configuration needed.
 
 
+
+
+### Markdown
+
+Formatted via [dprint](https://dprint.dev/) with sensible defaults:
+
+- 140 character line width
+- 2-space indentation
+- Maintains original prose wrapping
+- Normalizes list markers and block quotes
+
+Markdown cells in Fabric notebooks use a special `# MARKDOWN ********************` header format. The formatter handles stripping and re-adding comment prefixes automatically.
+
 ## Documentation
 Find all documentation at [fabric-format wiki](https://github.com/JacobKnightley/fabric-format/wiki)
