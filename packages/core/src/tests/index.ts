@@ -23,6 +23,7 @@ import {
 import {
   basicFormattingTests as markdownBasicFormattingTests,
   runInitializationTests as runMarkdownInitializationTests,
+  runNotebookIntegrationTests as runMarkdownNotebookIntegrationTests,
 } from './markdown/index.js';
 // Import Python test suites
 import {
@@ -290,6 +291,15 @@ async function main(): Promise<void> {
     failed: markdownInitResult.failed,
     results: [],
   });
+
+  // Re-initialize markdown formatter (initialization tests reset it)
+  await initializeMarkdownFormatter();
+
+  // Run Markdown notebook integration tests
+  const markdownNotebookResult = await runMarkdownNotebookIntegrationTests();
+  results.push(markdownNotebookResult);
+  printSuiteResult(markdownNotebookResult, verbose);
+
   if (timing)
     console.log(
       `  ⏱ Markdown tests: ${(performance.now() - markdownTestStart).toFixed(0)}ms`,

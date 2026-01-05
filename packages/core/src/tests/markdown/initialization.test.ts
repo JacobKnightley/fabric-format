@@ -6,8 +6,8 @@
 import type { TestSuite } from '../framework.js';
 import {
   getMarkdownFormatter,
-  resetMarkdownFormatter,
 } from '../../formatters/markdown/index.js';
+import { resetMarkdownFormatterState } from '../../cell-formatter.js';
 
 export const initializationTests: TestSuite = {
   name: 'Markdown Initialization',
@@ -35,7 +35,7 @@ export async function runInitializationTests(): Promise<{
 
   // Test: Formatter not ready before initialization
   try {
-    resetMarkdownFormatter();
+    resetMarkdownFormatterState();
     const formatter = getMarkdownFormatter();
     if (!formatter.isReady()) {
       console.log('  [PASS] Formatter not ready before initialization');
@@ -51,7 +51,7 @@ export async function runInitializationTests(): Promise<{
 
   // Test: Formatter ready after initialization
   try {
-    resetMarkdownFormatter();
+    resetMarkdownFormatterState();
     const formatter = getMarkdownFormatter();
     await formatter.initialize();
     if (formatter.isReady()) {
@@ -68,7 +68,7 @@ export async function runInitializationTests(): Promise<{
 
   // Test: Multiple initialization calls are safe (idempotent)
   try {
-    resetMarkdownFormatter();
+    resetMarkdownFormatterState();
     const formatter = getMarkdownFormatter();
     await formatter.initialize();
     await formatter.initialize(); // Second call should be no-op
@@ -86,7 +86,7 @@ export async function runInitializationTests(): Promise<{
 
   // Test: Can format after initialization
   try {
-    resetMarkdownFormatter();
+    resetMarkdownFormatterState();
     const formatter = getMarkdownFormatter();
     await formatter.initialize();
     const result = formatter.format('# Test', { stripTrailingNewline: true });
@@ -104,10 +104,10 @@ export async function runInitializationTests(): Promise<{
 
   // Test: Reset allows re-initialization
   try {
-    resetMarkdownFormatter();
+    resetMarkdownFormatterState();
     const formatter1 = getMarkdownFormatter();
     await formatter1.initialize();
-    resetMarkdownFormatter();
+    resetMarkdownFormatterState();
     const formatter2 = getMarkdownFormatter();
     if (!formatter2.isReady()) {
       console.log('  [PASS] Reset clears ready state');

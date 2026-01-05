@@ -9,3 +9,4 @@ export {
   initializationTests,
   runInitializationTests,
 } from './initialization.test.js';
+export { runNotebookIntegrationTests } from './notebook-integration.test.js';
