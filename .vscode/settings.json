@@ -1,3 +1,24 @@
 {
-  "github.copilot.chat.mcpServers.enabled": true
+  "github.copilot.chat.mcpServers.enabled": true,
+
+  // Use Biome as default formatter for supported languages
+  "editor.defaultFormatter": "biomejs.biome",
+  "[typescript]": {
+    "editor.defaultFormatter": "biomejs.biome"
+  },
+  "[javascript]": {
+    "editor.defaultFormatter": "biomejs.biome"
+  },
+  "[json]": {
+    "editor.defaultFormatter": "biomejs.biome"
+  },
+  "[jsonc]": {
+    "editor.defaultFormatter": "biomejs.biome"
+  },
+
+  // Format and fix on save (matches pre-commit: biome check . --write)
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.fixAll.biome": "explicit"
+  }
 }
