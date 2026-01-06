@@ -1541,27 +1541,22 @@ async function generateFormatPreviewContent() {
  * Main debug function - shows tabbed popup with all debug info
  */
 async function debugLogCellDiscovery() {
-  // Show popup immediately with loading states
+  // Gather ALL data BEFORE showing popup to avoid scroll interference
+  // (popup backdrop/focus can interfere with scrollIntoView)
+
+  // Generate cell discovery content (scrolls through cells)
+  const cellDiscoveryContent = await generateCellDiscoveryContent();
+
+  // Generate format preview content (scrolls through cells again)
+  const formatPreviewContent = await generateFormatPreviewContent();
+
+  // NOW show popup with all content ready
   const tabs = [
-    {
-      name: '📋 Cell Discovery',
-      content: 'Scrolling through cells to gather data...',
-    },
-    { name: '🔄 Format Preview', content: 'Loading format preview...' },
+    { name: '📋 Cell Discovery', content: cellDiscoveryContent },
+    { name: '🔄 Format Preview', content: formatPreviewContent },
   ];
 
   showTabbedDebugPopup(tabs);
-
-  // Generate cell discovery content (now async - scrolls through cells)
-  const cellDiscoveryContent = await generateCellDiscoveryContent();
-  tabs[0].content = cellDiscoveryContent;
-
-  // Update the popup to show cell discovery (re-show to refresh content)
-  showTabbedDebugPopup(tabs);
-
-  // Generate format preview async and update tab
-  const formatPreviewContent = await generateFormatPreviewContent();
-  tabs[1].content = formatPreviewContent;
 }
 
 // ============================================================================
