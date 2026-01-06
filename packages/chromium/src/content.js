@@ -1751,8 +1751,8 @@ function createFloatingButton() {
     button.name = 'FormatCells';
     button.id = 'fabric-formatter-button';
     button.className = 'fui-Button r1alrhcs';
-    button.setAttribute('aria-label', 'Format all Python and SQL cells');
-    button.title = 'Format all cells (Python & SQL)';
+    button.setAttribute('aria-label', 'Format all cells');
+    button.title = 'Format all cells';
 
     button.innerHTML = `
       <span class="fui-Button__icon">
