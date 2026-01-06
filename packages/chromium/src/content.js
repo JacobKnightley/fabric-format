@@ -1292,7 +1292,147 @@ function generateCellDiscoveryContent() {
 }
 
 /**
- * Generate format preview content showing current vs formatted text for each cell
+ * Scroll to a cell, focus its editor, and wait for Monaco content to stabilize.
+ * Monaco virtualizes content, so we must scroll and wait for text to settle.
+ *
+ * =========================================================================
+ * CRITICAL: Monaco Lazy-Loading Text Stabilization
+ * =========================================================================
+ * DO NOT REMOVE OR SIMPLIFY THIS FUNCTION without understanding fabric-format-ska.
+ *
+ * Monaco + Fabric lazy-loads cell content in stages:
+ *   1. Cell container exists in DOM (but may be virtualized/empty)
+ *   2. After scroll: .view-line divs are created (but empty!)
+ *   3. After focus: Text spans begin populating ASYNCHRONOUSLY
+ *   4. Text content arrives incrementally over multiple frames
+ *
+ * We MUST wait for text to stabilize because:
+ *   - Line count is NOT a reliable proxy (empty divs exist before text)
+ *   - Text length changes as spans load (100 chars → 150 → 200...)
+ *   - Only full text extraction + comparison detects true completion
+ *
+ * Previous attempts to "optimize" this by reducing checks or using proxies
+ * resulted in partial text capture and corrupted formatting. See:
+ *   - fabric-format-ska: Original bug report
+ *   - fabric-format-ot3: Performance audit with context
+ *
+ * SAFE optimizations: Make extractCodeFromEditor() faster (it's called often)
+ * UNSAFE: Reducing stableChecks, using line count, shortening timeouts
+ * =========================================================================
+ *
+ * @param {Element} cellContainer - The cell container element
+ * @param {number} cellIndex - 0-based cell index (for logging)
+ * @returns {Promise<{editor: Element|null, code: string, language: string|null, stabilizationMs: number}>}
+ */
+async function scrollAndStabilizeCell(cellContainer, cellIndex) {
+  const startTime = performance.now();
+
+  // Scroll to cell to ensure content is loaded (Monaco virtualizes)
+  cellContainer.scrollIntoView({ block: 'center', behavior: 'instant' });
+  await new Promise((r) => setTimeout(r, TIMING.SCROLL_SETTLE_MS));
+
+  // Focus the editor to trigger Monaco to load content
+  let editor = cellContainer.querySelector('.monaco-editor');
+  if (editor) {
+    const textarea = editor.querySelector('textarea.inputarea');
+    if (textarea) {
+      textarea.focus();
+      await new Promise((r) => setTimeout(r, TIMING.DOM_SETTLE_MS));
+    }
+  }
+
+  // Re-query editor after scroll (Fabric may recreate DOM elements)
+  editor = cellContainer.querySelector('.monaco-editor');
+
+  if (!editor) {
+    return {
+      editor: null,
+      code: '',
+      language: null,
+      stabilizationMs: Math.round(performance.now() - startTime),
+    };
+  }
+
+  // =========================================================================
+  // CRITICAL: Wait for Monaco text to stabilize (3 consecutive stable reads)
+  // DO NOT REMOVE OR SIMPLIFY THIS SECTION
+  // =========================================================================
+  let lastExtractedText = '';
+  let stableChecks = 0;
+
+  // Early exit optimization: check if content is already stable
+  const initialText = extractCodeFromEditor(editor);
+  if (initialText.length > 0) {
+    await new Promise((r) => setTimeout(r, TIMING.EDITOR_LINE_POLL_MS));
+    const verifyText = editor ? extractCodeFromEditor(editor) : '';
+    if (verifyText === initialText && verifyText.length > 0) {
+      // Already stable - skip the full loop
+      lastExtractedText = verifyText;
+      stableChecks = 3;
+      log.debug(
+        `Cell ${cellIndex + 1}: early exit - already stable at ${verifyText.length} chars`,
+      );
+    } else {
+      // Not stable yet, initialize for the loop
+      lastExtractedText = verifyText;
+      stableChecks =
+        verifyText === initialText && verifyText.length > 0 ? 1 : 0;
+    }
+  }
+
+  // Adaptive polling: start fast (30ms), slow down after first stable reading
+  let pollInterval = TIMING.EDITOR_LINE_POLL_MS;
+
+  for (let attempt = 0; attempt < 100 && stableChecks < 3; attempt++) {
+    await new Promise((r) => setTimeout(r, pollInterval));
+
+    // Re-query editor only if disconnected (fabric-format-8hk)
+    // Monaco/Fabric may recreate DOM elements during virtualization
+    if (!editor?.isConnected) {
+      editor = cellContainer.querySelector('.monaco-editor');
+    }
+    if (editor) {
+      const currentText = extractCodeFromEditor(editor);
+      const lengthMatch = currentText.length === lastExtractedText.length;
+      if (
+        currentText.length > 0 &&
+        lengthMatch &&
+        currentText === lastExtractedText
+      ) {
+        stableChecks++;
+        // Adaptive: slow down after first stable reading
+        if (stableChecks === 1) {
+          pollInterval = Math.min(pollInterval * 1.5, 100);
+        }
+        if (stableChecks >= 3) {
+          log.debug(
+            `Cell ${cellIndex + 1}: stable at ${currentText.length} chars after ${Math.round(performance.now() - startTime)}ms`,
+          );
+          break;
+        }
+      } else {
+        // Text changed - reset stability counter, go back to fast polling
+        stableChecks = 0;
+        pollInterval = TIMING.EDITOR_LINE_POLL_MS;
+        lastExtractedText = currentText;
+      }
+    }
+  }
+
+  const cellType = detectCellType(editor);
+  const language = mapCellTypeToLanguage(cellType);
+
+  return {
+    editor,
+    code: lastExtractedText,
+    language,
+    stabilizationMs: Math.round(performance.now() - startTime),
+  };
+}
+
+/**
+ * Generate format preview content showing current vs formatted text for each cell.
+ * Uses shared scrollAndStabilizeCell for proper Monaco content loading.
  */
 async function generateFormatPreviewContent() {
   const lines = [];
@@ -1333,6 +1473,10 @@ async function generateFormatPreviewContent() {
   addLine(`Total cells in active notebook: ${cellContainers.length}`);
   addLine();
 
+  // Capture scroll position to restore later
+  const scrollContainer = findScrollContainer();
+  const originalScroll = scrollContainer?.scrollTop || 0;
+
   let formattableCount = 0;
   let wouldChangeCount = 0;
   let alreadyFormattedCount = 0;
@@ -1341,10 +1485,13 @@ async function generateFormatPreviewContent() {
   for (let i = 0; i < cellContainers.length; i++) {
     const cellContainer = cellContainers[i];
     const cellId = cellContainer.getAttribute('data-cell-id');
-    const editor = cellContainer.querySelector('.monaco-editor');
 
     addSubSection(`CELL ${i + 1}`);
     addLine(`Cell ID: ${cellId}`);
+
+    // Use shared scroll+stabilize logic
+    const { editor, code, language, stabilizationMs } =
+      await scrollAndStabilizeCell(cellContainer, i);
 
     if (!editor) {
       addLine(`Type: no-editor (markdown/output cell)`);
@@ -1354,10 +1501,9 @@ async function generateFormatPreviewContent() {
     }
 
     const cellType = detectCellType(editor);
-    const language = mapCellTypeToLanguage(cellType);
-
     addLine(`Detected Type: ${cellType}`);
     addLine(`Language: ${language || 'unsupported'}`);
+    addLine(`Stabilization: ${stabilizationMs}ms`);
 
     if (!language) {
       addLine(`Status: SKIPPED (unsupported language)`);
@@ -1367,26 +1513,23 @@ async function generateFormatPreviewContent() {
 
     formattableCount++;
 
-    // Extract current code
-    const currentCode = extractCodeFromEditor(editor);
-
-    if (!currentCode.trim()) {
+    if (!code.trim()) {
       addLine(`Status: SKIPPED (empty cell)`);
       addLine();
       continue;
     }
 
     addLine(
-      `Current Code (${currentCode.length} chars, ${currentCode.split('\n').length} lines):`,
+      `Current Code (${code.length} chars, ${code.split('\n').length} lines):`,
     );
     addLine('```');
-    addLine(currentCode);
+    addLine(code);
     addLine('```');
     addLine();
 
     // Format the code (without applying)
     const context = { cellIndex: i + 1, language };
-    const result = formatCell(currentCode, language, context);
+    const result = formatCell(code, language, context);
 
     if (result.error) {
       errorCount++;
@@ -1407,6 +1550,11 @@ async function generateFormatPreviewContent() {
       addLine('```');
     }
     addLine();
+  }
+
+  // Restore scroll position
+  if (scrollContainer) {
+    scrollContainer.scrollTop = originalScroll;
   }
 
   addSection('SUMMARY');
@@ -1624,134 +1772,23 @@ async function formatAllCells() {
     const cellContainer = cellContainers[i];
     updateOverlay(`Processing cell ${i + 1}/${totalCells}...`);
 
-    // Always scroll to ensure full content is rendered (Monaco virtualizes tall cells)
-    cellContainer.scrollIntoView({ block: 'center', behavior: 'instant' });
-
-    // Wait a moment for scroll to settle
-    await new Promise((r) => setTimeout(r, TIMING.SCROLL_SETTLE_MS));
-
-    // =========================================================================
-    // CRITICAL: Monaco Lazy-Loading Text Stabilization
-    // =========================================================================
-    // DO NOT REMOVE OR SIMPLIFY THIS SECTION without understanding fabric-format-ska.
-    //
-    // Monaco + Fabric lazy-loads cell content in stages:
-    //   1. Cell container exists in DOM (but may be virtualized/empty)
-    //   2. After scroll: .view-line divs are created (but empty!)
-    //   3. After focus: Text spans begin populating ASYNCHRONOUSLY
-    //   4. Text content arrives incrementally over multiple frames
-    //
-    // We MUST wait for text to stabilize because:
-    //   - Line count is NOT a reliable proxy (empty divs exist before text)
-    //   - Text length changes as spans load (100 chars → 150 → 200...)
-    //   - Only full text extraction + comparison detects true completion
-    //
-    // Previous attempts to "optimize" this by reducing checks or using proxies
-    // resulted in partial text capture and corrupted formatting. See:
-    //   - fabric-format-ska: Original bug report
-    //   - fabric-format-ot3: Performance audit with context
-    //
-    // SAFE optimizations: Make extractCodeFromEditor() faster (it's called often)
-    // UNSAFE: Reducing stableChecks, using line count, shortening timeouts
-    // =========================================================================
-
-    // Find and FOCUS the editor to trigger Monaco to load full content
-    // Monaco lazy-loads text content only when the editor has focus
-    let editor = cellContainer.querySelector('.monaco-editor');
-    if (editor) {
-      const textarea = editor.querySelector('textarea.inputarea');
-      if (textarea) {
-        textarea.focus();
-        await new Promise((r) => setTimeout(r, TIMING.DOM_SETTLE_MS));
-      }
-    }
-
-    // Wait for editor content to stabilize (see critical note above)
-    // Optimization (fabric-format-pzt): Early exit + adaptive polling
-    let lastExtractedText = '';
-    let stableChecks = 0;
-    const startTime = performance.now();
-
-    // Early exit check: if content is already loaded (common for visible cells)
-    const initialText = editor ? extractCodeFromEditor(editor) : '';
-    if (initialText.length > 0) {
-      // Do a quick verification - wait one poll and check again
-      await new Promise((r) => setTimeout(r, TIMING.EDITOR_LINE_POLL_MS));
-      const verifyText = editor ? extractCodeFromEditor(editor) : '';
-      if (verifyText === initialText && verifyText.length > 0) {
-        // Already stable - skip the full loop
-        lastExtractedText = verifyText;
-        stableChecks = 3; // Mark as stable
-        log.debug(
-          `Cell ${i + 1}: early exit - already stable at ${verifyText.length} chars`,
-        );
-      } else {
-        // Not stable yet, initialize for the loop
-        lastExtractedText = verifyText;
-        stableChecks =
-          verifyText === initialText && verifyText.length > 0 ? 1 : 0;
-      }
-    }
-
-    // Adaptive polling: start fast (30ms), slow down after first stable reading
-    let pollInterval = TIMING.EDITOR_LINE_POLL_MS; // Start at 30ms
-
-    for (let attempt = 0; attempt < 100 && stableChecks < 3; attempt++) {
-      await new Promise((r) => setTimeout(r, pollInterval));
-
-      // Re-query editor only if disconnected (fabric-format-8hk)
-      // Monaco/Fabric may recreate DOM elements during virtualization
-      if (!editor?.isConnected) {
-        editor = cellContainer.querySelector('.monaco-editor');
-      }
-      if (editor) {
-        // Full text extraction - this is what we'll actually format
-        const currentText = extractCodeFromEditor(editor);
-
-        // Text must be non-empty and stable across 3 consecutive checks
-        // Optimization (fabric-format-zp6): length check first as fast negative
-        const lengthMatch = currentText.length === lastExtractedText.length;
-        if (
-          currentText.length > 0 &&
-          lengthMatch &&
-          currentText === lastExtractedText
-        ) {
-          stableChecks++;
-          // Adaptive: slow down after first stable reading (content is settling)
-          if (stableChecks === 1) {
-            pollInterval = Math.min(pollInterval * 1.5, 100); // Slow down, max 100ms
-          }
-          if (stableChecks >= 3) {
-            log.debug(
-              `Cell ${i + 1}: stable at ${currentText.length} chars after ${Math.round(performance.now() - startTime)}ms`,
-            );
-            break;
-          }
-        } else {
-          // Text changed - reset stability counter, go back to fast polling
-          stableChecks = 0;
-          pollInterval = TIMING.EDITOR_LINE_POLL_MS;
-          lastExtractedText = currentText;
-        }
-      }
-    }
+    // Use shared scroll+stabilize logic to get stable cell content
+    const {
+      editor,
+      code: originalCode,
+      language,
+    } = await scrollAndStabilizeCell(cellContainer, i);
 
     if (!editor) {
       _skipped++;
       continue;
     }
 
-    // Use proper language detection
-    const cellType = detectCellType(editor);
-    const language = mapCellTypeToLanguage(cellType);
-
     if (!language) {
       _skipped++;
       continue;
     }
 
-    // Use the stable extracted text from the loop
-    const originalCode = lastExtractedText;
     if (!originalCode.trim()) {
       _skipped++;
       continue;
