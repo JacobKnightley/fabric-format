@@ -976,8 +976,9 @@ function showTabbedDebugPopup(tabs) {
 
 /**
  * Generate cell discovery debug content
+ * Now async - scrolls through cells to ensure Monaco loads content for accurate detection
  */
-function generateCellDiscoveryContent() {
+async function generateCellDiscoveryContent() {
   const lines = [];
   const addLine = (text = '') => lines.push(text);
   const addSection = (title) => {
@@ -996,25 +997,56 @@ function generateCellDiscoveryContent() {
   addLine();
 
   // Get all nteract cell containers (what formatAllCells uses)
-  const cellContainers = document.querySelectorAll(
+  const allCellContainers = document.querySelectorAll(
     '.nteract-cell-container[data-cell-id]',
   );
+
+  // Filter to visible cells only (active notebook)
+  const cellContainers = Array.from(allCellContainers).filter((cell) => {
+    const style = window.getComputedStyle(cell);
+    return style.visibility !== 'hidden';
+  });
+
   addLine(
-    `Total .nteract-cell-container[data-cell-id] found: ${cellContainers.length}`,
+    `Total .nteract-cell-container[data-cell-id] found: ${allCellContainers.length}`,
   );
+  addLine(`Visible cells (active notebook): ${cellContainers.length}`);
 
   // Get all Monaco editors for comparison
   const allEditors = document.querySelectorAll('.monaco-editor');
   addLine(`Total .monaco-editor elements found: ${allEditors.length}`);
   addLine();
 
+  // Capture scroll position to restore later
+  const scrollContainer = findScrollContainer();
+  const originalScroll = scrollContainer?.scrollTop || 0;
+
   // Build a map of parent containers to group cells
   const containerGroups = new Map();
   const cellDetails = [];
 
+  // Scroll through each cell to gather accurate data (Monaco virtualizes content)
   for (let i = 0; i < cellContainers.length; i++) {
     const cell = cellContainers[i];
     const cellId = cell.getAttribute('data-cell-id');
+
+    // Scroll to cell to ensure Monaco loads content
+    cell.scrollIntoView({ block: 'center', behavior: 'instant' });
+    await new Promise((r) => setTimeout(r, TIMING.SCROLL_SETTLE_MS));
+
+    // Focus editor to trigger content load
+    let editor = cell.querySelector('.monaco-editor');
+    if (editor) {
+      const textarea = editor.querySelector('textarea.inputarea');
+      if (textarea) {
+        textarea.focus();
+        await new Promise((r) => setTimeout(r, TIMING.DOM_SETTLE_MS));
+      }
+    }
+
+    // Re-query after scroll (Fabric may recreate DOM elements)
+    editor = cell.querySelector('.monaco-editor');
+
     const rect = cell.getBoundingClientRect();
     const style = window.getComputedStyle(cell);
 
@@ -1075,8 +1107,7 @@ function generateCellDiscoveryContent() {
     }
     containerGroups.get(containerKey).push(i);
 
-    // Get editor inside this cell
-    const editor = cell.querySelector('.monaco-editor');
+    // Detect cell type using the editor we already have
     const cellType = editor ? detectCellType(editor) : 'no-editor';
     const language = editor ? mapCellTypeToLanguage(cellType) : null;
 
@@ -1222,6 +1253,11 @@ function generateCellDiscoveryContent() {
     );
   } else {
     addLine('Status bar: NOT FOUND');
+  }
+
+  // Restore scroll position
+  if (scrollContainer) {
+    scrollContainer.scrollTop = originalScroll;
   }
 
   addLine();
@@ -1505,15 +1541,22 @@ async function generateFormatPreviewContent() {
  * Main debug function - shows tabbed popup with all debug info
  */
 async function debugLogCellDiscovery() {
-  // Generate cell discovery content (sync)
-  const cellDiscoveryContent = generateCellDiscoveryContent();
-
-  // Show popup immediately with cell discovery, then load format preview
+  // Show popup immediately with loading states
   const tabs = [
-    { name: '📋 Cell Discovery', content: cellDiscoveryContent },
+    {
+      name: '📋 Cell Discovery',
+      content: 'Scrolling through cells to gather data...',
+    },
     { name: '🔄 Format Preview', content: 'Loading format preview...' },
   ];
 
+  showTabbedDebugPopup(tabs);
+
+  // Generate cell discovery content (now async - scrolls through cells)
+  const cellDiscoveryContent = await generateCellDiscoveryContent();
+  tabs[0].content = cellDiscoveryContent;
+
+  // Update the popup to show cell discovery (re-show to refresh content)
   showTabbedDebugPopup(tabs);
 
   // Generate format preview async and update tab
