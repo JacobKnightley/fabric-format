@@ -848,6 +848,251 @@ function showNotification(message, type = 'success') {
 }
 
 // ============================================================================
+// Debug: Cell Discovery Logging (fabric-format-wphq)
+// ============================================================================
+
+/**
+ * Debug function to log all cells found in the DOM along with their container hierarchy.
+ * This helps identify how cells are grouped when multiple notebooks are open.
+ * Activated via a separate button to avoid triggering formatting.
+ */
+function debugLogCellDiscovery() {
+  log.info('='.repeat(80));
+  log.info('CELL DISCOVERY DEBUG - fabric-format-wphq');
+  log.info('='.repeat(80));
+
+  // Get all nteract cell containers (what formatAllCells uses)
+  const cellContainers = document.querySelectorAll(
+    '.nteract-cell-container[data-cell-id]',
+  );
+  log.info(
+    `Total .nteract-cell-container[data-cell-id] found: ${cellContainers.length}`,
+  );
+
+  // Get all Monaco editors for comparison
+  const allEditors = document.querySelectorAll('.monaco-editor');
+  log.info(`Total .monaco-editor elements found: ${allEditors.length}`);
+
+  // Build a map of parent containers to group cells
+  const containerGroups = new Map();
+  const cellDetails = [];
+
+  for (let i = 0; i < cellContainers.length; i++) {
+    const cell = cellContainers[i];
+    const cellId = cell.getAttribute('data-cell-id');
+    const rect = cell.getBoundingClientRect();
+    const style = window.getComputedStyle(cell);
+
+    // Walk up the DOM looking for notebook-level containers
+    let parent = cell.parentElement;
+    const ancestors = [];
+    let notebookContainer = null;
+
+    while (parent && parent !== document.body) {
+      const classes = parent.className || '';
+      const id = parent.id || '';
+      const dataAttrs = Array.from(parent.attributes)
+        .filter((a) => a.name.startsWith('data-'))
+        .map((a) => `${a.name}="${a.value}"`)
+        .join(' ');
+
+      // Look for potential notebook container markers
+      const isNotebookContainer =
+        classes.includes('notebook') ||
+        classes.includes('Notebook') ||
+        classes.includes('cell-list') ||
+        classes.includes('cellList') ||
+        id.includes('notebook') ||
+        id.includes('Notebook');
+
+      if (isNotebookContainer && !notebookContainer) {
+        notebookContainer = {
+          tagName: parent.tagName,
+          id: id || '(none)',
+          classes:
+            classes.substring(0, 100) + (classes.length > 100 ? '...' : ''),
+          dataAttrs: dataAttrs || '(none)',
+        };
+      }
+
+      // Track all ancestors with meaningful identifiers
+      if (classes || id || dataAttrs) {
+        ancestors.push({
+          tagName: parent.tagName,
+          id: id || '(none)',
+          classes:
+            classes.substring(0, 80) + (classes.length > 80 ? '...' : ''),
+          dataAttrs:
+            dataAttrs.substring(0, 80) + (dataAttrs.length > 80 ? '...' : ''),
+        });
+      }
+
+      parent = parent.parentElement;
+    }
+
+    // Group by the notebook container
+    const containerKey = notebookContainer
+      ? `${notebookContainer.tagName}#${notebookContainer.id}.${notebookContainer.classes.substring(0, 30)}`
+      : 'NO_CONTAINER';
+
+    if (!containerGroups.has(containerKey)) {
+      containerGroups.set(containerKey, []);
+    }
+    containerGroups.get(containerKey).push(i);
+
+    // Get editor inside this cell
+    const editor = cell.querySelector('.monaco-editor');
+    const cellType = editor ? detectCellType(editor) : 'no-editor';
+    const language = editor ? mapCellTypeToLanguage(cellType) : null;
+
+    cellDetails.push({
+      index: i,
+      cellId: cellId,
+      visible: rect.width > 0 && rect.height > 0,
+      display: style.display,
+      visibility: style.visibility,
+      hasEditor: !!editor,
+      cellType,
+      language,
+      rect: {
+        top: Math.round(rect.top),
+        left: Math.round(rect.left),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      },
+      notebookContainer,
+      ancestorCount: ancestors.length,
+    });
+  }
+
+  // Log grouped cells
+  log.info('-'.repeat(80));
+  log.info('CELLS GROUPED BY CONTAINER:');
+  log.info('-'.repeat(80));
+  for (const [containerKey, indices] of containerGroups.entries()) {
+    log.info(`Container: ${containerKey}`);
+    log.info(`  Cell indices: [${indices.join(', ')}]`);
+    log.info(`  Cell count: ${indices.length}`);
+  }
+
+  // Log individual cell details
+  log.info('-'.repeat(80));
+  log.info('INDIVIDUAL CELL DETAILS:');
+  log.info('-'.repeat(80));
+  for (const detail of cellDetails) {
+    log.info(`Cell ${detail.index}:`, detail);
+  }
+
+  // Look for potential active notebook markers
+  log.info('-'.repeat(80));
+  log.info('POTENTIAL ACTIVE NOTEBOOK MARKERS:');
+  log.info('-'.repeat(80));
+
+  // Check for aria-selected, data-active, or similar attributes
+  const potentialActiveMarkers = [
+    '[aria-selected="true"]',
+    '[data-active="true"]',
+    '[data-selected="true"]',
+    '.active',
+    '.selected',
+    '[class*="active"]',
+    '[class*="Active"]',
+    '[class*="selected"]',
+    '[class*="Selected"]',
+    '[class*="focus"]',
+    '[class*="Focus"]',
+  ];
+
+  for (const selector of potentialActiveMarkers) {
+    try {
+      const elements = document.querySelectorAll(selector);
+      if (elements.length > 0) {
+        // Filter to elements that contain or are near notebook content
+        const relevant = Array.from(elements).filter((el) => {
+          return (
+            el.querySelector('.monaco-editor') ||
+            el.querySelector('.nteract-cell-container') ||
+            el.closest('[class*="notebook"]') ||
+            el.closest('[class*="Notebook"]')
+          );
+        });
+        if (relevant.length > 0) {
+          log.info(`Selector: ${selector}`);
+          log.info(
+            `  Total matches: ${elements.length}, Notebook-related: ${relevant.length}`,
+          );
+          for (const el of relevant.slice(0, 3)) {
+            log.info(`  Element:`, {
+              tagName: el.tagName,
+              id: el.id || '(none)',
+              classes: (el.className || '').substring(0, 80),
+            });
+          }
+        }
+      }
+    } catch (_e) {
+      // Invalid selector, skip
+    }
+  }
+
+  // Check document.activeElement and its ancestors
+  log.info('-'.repeat(80));
+  log.info('ACTIVE ELEMENT HIERARCHY:');
+  log.info('-'.repeat(80));
+  let activeEl = document.activeElement;
+  let depth = 0;
+  while (activeEl && activeEl !== document.body && depth < 15) {
+    log.info(`  Depth ${depth}:`, {
+      tagName: activeEl.tagName,
+      id: activeEl.id || '(none)',
+      classes: (activeEl.className || '').substring(0, 80),
+    });
+    activeEl = activeEl.parentElement;
+    depth++;
+  }
+
+  // Check visibility of iframes if present
+  log.info('-'.repeat(80));
+  log.info('IFRAME/FRAME INFO:');
+  log.info('-'.repeat(80));
+  log.info('Current window info:', {
+    isTop: window === window.top,
+    name: window.name || '(none)',
+    location: window.location.href.substring(0, 100),
+  });
+
+  // Status bar info
+  log.info('-'.repeat(80));
+  log.info('STATUS BAR INFO:');
+  log.info('-'.repeat(80));
+  const statusBar = findStatusBar();
+  if (statusBar) {
+    const cellSelectionBtn = statusBar.querySelector(
+      'button[name="CellSelection"]',
+    );
+    if (cellSelectionBtn) {
+      log.info('CellSelection button text:', cellSelectionBtn.textContent);
+    }
+    log.info('Status bar found:', {
+      tagName: statusBar.tagName,
+      classes: (statusBar.className || '').substring(0, 80),
+    });
+  } else {
+    log.info('Status bar: NOT FOUND');
+  }
+
+  log.info('='.repeat(80));
+  log.info('END CELL DISCOVERY DEBUG');
+  log.info('='.repeat(80));
+
+  // Show notification to user
+  showNotification(
+    `Found ${cellContainers.length} cells in ${containerGroups.size} container(s). Check console for details.`,
+    'success',
+  );
+}
+
+// ============================================================================
 // Format Actions
 // ============================================================================
 
@@ -1330,6 +1575,14 @@ function createFloatingButton() {
     existing.remove();
   }
 
+  // Also clean up debug button if needed
+  const existingDebug = document.getElementById(
+    'fabric-formatter-debug-button',
+  );
+  if (existingDebug && !existingDebug.isConnected) {
+    existingDebug.remove();
+  }
+
   const statusBar = findStatusBar();
 
   if (statusBar) {
@@ -1355,16 +1608,40 @@ function createFloatingButton() {
 
     button.addEventListener('click', formatAllCells);
 
+    // Debug button for cell discovery logging (fabric-format-wphq)
+    const debugButton = document.createElement('button');
+    debugButton.type = 'button';
+    debugButton.name = 'DebugCells';
+    debugButton.id = 'fabric-formatter-debug-button';
+    debugButton.className = 'fui-Button r1alrhcs';
+    debugButton.setAttribute(
+      'aria-label',
+      'Debug: Log cell discovery info to console',
+    );
+    debugButton.title = 'Debug: Log cell info (see console)';
+
+    debugButton.innerHTML = `
+      <span class="fui-Button__icon">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+          <path d="M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2ZM3 8a5 5 0 1 1 10 0A5 5 0 0 1 3 8Zm5.5-3a.5.5 0 0 0-1 0v3.5a.5.5 0 0 0 .5.5h2a.5.5 0 0 0 0-1H8.5V5Z"/>
+        </svg>
+      </span>
+      <span>Debug</span>`;
+
+    debugButton.addEventListener('click', debugLogCellDiscovery);
+
     const cellSelectionButton = statusBar.querySelector(
       'button[name="CellSelection"]',
     );
     if (cellSelectionButton) {
       statusBar.insertBefore(button, cellSelectionButton);
+      statusBar.insertBefore(debugButton, cellSelectionButton);
     } else {
       statusBar.appendChild(button);
+      statusBar.appendChild(debugButton);
     }
 
-    log.info('Button injected into status bar');
+    log.info('Button injected into status bar (with debug button)');
     return true;
   }
 
