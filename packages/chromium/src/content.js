@@ -1685,43 +1685,6 @@ async function _formatCurrentCell() {
 }
 
 /**
- * DEBUG: Flag to enable text stability verification.
- * When true, formats cell, undoes with Ctrl+Z, re-extracts and compares.
- * This detects if we captured partial text due to Fabric's lazy loading.
- * SET TO false FOR PRODUCTION - doubles processing time when enabled!
- */
-const DEBUG_TEXT_STABILITY = false;
-
-/**
- * Send Ctrl+Z (undo) to the editor
- */
-async function sendUndo(editorElement) {
-  const textarea = editorElement.querySelector('textarea.inputarea');
-  if (!textarea) {
-    log.warn('sendUndo: no textarea found');
-    return false;
-  }
-
-  textarea.focus();
-  await new Promise((r) => setTimeout(r, TIMING.DOM_SETTLE_MS));
-
-  textarea.dispatchEvent(
-    new KeyboardEvent('keydown', {
-      key: 'z',
-      code: 'KeyZ',
-      keyCode: 90,
-      which: 90,
-      ctrlKey: true,
-      bubbles: true,
-      cancelable: true,
-    }),
-  );
-
-  await new Promise((r) => setTimeout(r, TIMING.DOM_SETTLE_MS));
-  return true;
-}
-
-/**
  * Format all cells in the notebook
  */
 async function formatAllCells() {
@@ -1819,71 +1782,6 @@ async function formatAllCells() {
       failedCells.push(i + 1);
       failed++;
       continue;
-    }
-
-    // DEBUG: Text stability verification via undo
-    if (DEBUG_TEXT_STABILITY) {
-      await new Promise((r) => setTimeout(r, 100)); // Let paste settle
-
-      // Undo the paste
-      await sendUndo(editor);
-      await new Promise((r) => setTimeout(r, 150)); // Let undo settle
-
-      // Re-extract the text after undo
-      const afterUndo = extractCodeFromEditor(editor);
-
-      if (originalCode !== afterUndo) {
-        const cellId = cellContainer.getAttribute('data-cell-id');
-        log.info(`🔍 PARTIAL TEXT DETECTED - Cell ${i + 1} (id: ${cellId})`);
-        log.info(`🔍 Original extraction (${originalCode.length} chars):`);
-        log.info(`🔍 ---BEGIN ORIGINAL---`);
-        log.info(originalCode);
-        log.info(`🔍 ---END ORIGINAL---`);
-        log.info(`🔍 After undo (${afterUndo.length} chars):`);
-        log.info(`🔍 ---BEGIN AFTER UNDO---`);
-        log.info(afterUndo);
-        log.info(`🔍 ---END AFTER UNDO---`);
-        log.info(`🔍 Char diff: ${afterUndo.length - originalCode.length}`);
-        log.info(`🔍 Line count original: ${originalCode.split('\n').length}`);
-        log.info(`🔍 Line count after undo: ${afterUndo.split('\n').length}`);
-
-        // Find first difference position
-        let diffPos = 0;
-        const minLen = Math.min(originalCode.length, afterUndo.length);
-        while (
-          diffPos < minLen &&
-          originalCode[diffPos] === afterUndo[diffPos]
-        ) {
-          diffPos++;
-        }
-        log.info(`🔍 First difference at char position: ${diffPos}`);
-        log.info(
-          `🔍 Context around diff (original): "${originalCode.substring(Math.max(0, diffPos - 20), diffPos + 40)}"`,
-        );
-        log.info(
-          `🔍 Context around diff (after undo): "${afterUndo.substring(Math.max(0, diffPos - 20), diffPos + 40)}"`,
-        );
-
-        // DOM state at time of extraction
-        const viewLines = editor.querySelectorAll('.view-lines .view-line');
-        log.info(`🔍 DOM view-line count: ${viewLines.length}`);
-        log.info(
-          `🔍 Time since scroll: ${Math.round(performance.now() - startTime)}ms`,
-        );
-        log.info(`🔍 Editor rect:`, editor.getBoundingClientRect());
-        log.info(
-          `🔍 Cell container rect:`,
-          cellContainer.getBoundingClientRect(),
-        );
-
-        // Re-apply the format since we undid it
-        log.info(`🔍 Re-applying format after detection...`);
-        await setCodeViaPaste(editor, result.formatted);
-      } else {
-        // Text matched - redo the format (undo our undo)
-        // Actually we need to re-paste since undo reverted to original
-        await setCodeViaPaste(editor, result.formatted);
-      }
     }
 
     formatted++;
