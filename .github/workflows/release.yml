@@ -87,3 +87,13 @@ jobs:
             Core: v${{ steps.versions.outputs.core }}
             
             Download and extract the zip, then load unpacked in Chrome/Edge.
+
+      # Edge Add-ons: publish to Microsoft Edge marketplace
+      - name: Publish to Edge Add-ons
+        if: steps.chromium-check.outputs.exists == 'false'
+        uses: wdzeng/edge-addon@v2
+        with:
+          product-id: ${{ secrets.EDGE_PRODUCT_ID }}
+          zip-path: fabric-format-chromium-${{ steps.versions.outputs.chromium }}.zip
+          client-id: ${{ secrets.EDGE_CLIENT_ID }}
+          api-key: ${{ secrets.EDGE_CLIENT_SECRET }}
