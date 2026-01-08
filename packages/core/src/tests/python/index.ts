@@ -15,3 +15,9 @@ export {
   notebookIntegrationTests,
   runNotebookIntegrationTests,
 } from './notebook-integration.test.js';
+export {
+  allSparkSqlInPythonTests,
+  sparkSqlEdgeCaseTests,
+  sparkSqlExtractionTests,
+  sparkSqlPlaceholderTests,
+} from './spark-sql-in-python.test.js';

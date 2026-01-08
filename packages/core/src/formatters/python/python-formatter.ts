@@ -11,6 +11,7 @@ import type {
   LanguageFormatter,
 } from '../types.js';
 import { RUFF_LINT_CONFIG, RUFF_WASM_CONFIG } from './config.js';
+import { formatSparkSqlInPython } from './spark-sql-formatter.js';
 
 // Dynamic import for ruff WASM (loaded on demand)
 let ruffModule: typeof import('@astral-sh/ruff-wasm-web') | null = null;
@@ -359,6 +360,10 @@ export class PythonFormatter implements LanguageFormatter {
           codeAfterMagic = applyLintFixes(codeAfterMagic);
           let formatted = formatWorkspace.format(codeAfterMagic);
 
+          // Step 2: Format SQL inside spark.sql() calls (after Ruff to preserve quote style)
+          const sparkSqlResult = formatSparkSqlInPython(formatted);
+          formatted = sparkSqlResult.formatted;
+
           // Strip trailing newline if configured
           if (options?.stripTrailingNewline) {
             formatted = formatted.replace(/\n+$/, '');
@@ -404,6 +409,10 @@ export class PythonFormatter implements LanguageFormatter {
       // Apply safe lint fixes first, then format
       pythonCode = applyLintFixes(pythonCode);
       let formatted = formatWorkspace.format(pythonCode);
+
+      // Step 2: Format SQL inside spark.sql() calls (after Ruff to preserve quote style)
+      const sparkSqlResult = formatSparkSqlInPython(formatted);
+      formatted = sparkSqlResult.formatted;
 
       // Post-processing: Strip trailing newline if configured
       if (options?.stripTrailingNewline) {
