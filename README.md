@@ -22,7 +22,7 @@ Format Fabric notebooks directly in your browser with a single click.
 ![Demo](assets/extension-demo.mp4)
 
 ### Edge Installation
-1. Install the extension from [Edge Add-ons](https://github.com/jacobknightley/fabric-format/releases](https://microsoftedge.microsoft.com/addons/detail/fabric-format/pagkopelpfjaedelgckkbmcepekgheaj)
+1. Install the extension from [Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/fabric-format/pagkopelpfjaedelgckkbmcepekgheaj)
 
 ### Chrome Installation
 
