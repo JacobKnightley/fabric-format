@@ -2,13 +2,6 @@
 
 A zero-config formatter for **Microsoft Fabric notebooks**.
 
-## Packages
-
-| Package                                      | Description                                |
-| -------------------------------------------- | ------------------------------------------ |
-| [@jacobknightley/fabric-format](./packages/core) | Core formatting library (npm package)      |
-| [fabric-format-chromium](./packages/chromium)    | Chrome/Edge extension for Fabric notebooks |
-
 ## Philosophy
 
 **Opinionated by design.** This formatter has one style, enforced everywhere, with no configuration options—and no plans to add any.
@@ -17,13 +10,29 @@ Built this for teams who want consistent notebook formatting without endless deb
 
 The focus is on clean, consistent output—not tailored experiences or nuanced edge cases.
 
+## Browser Extension
+
+Format Fabric notebooks directly in your browser with a single click.
+
+### Usage
+
+1. Open a notebook in Microsoft Fabric
+2. Click the ![Format button in Fabric notebook toolbar](assets/extension-format-button.png) button in the notebook toolbar
+
+![Demo](assets/extension-demo.mp4)
+
+### Edge Installation
+1. Install the extension from [Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/fabric-format/pagkopelpfjaedelgckkbmcepekgheaj)
+
+### Chrome Installation
+
+1. Download `fabric-format-chromium.zip` from the [latest release](https://github.com/jacobknightley/fabric-format/releases)
+2. Extract the zip file
+3. Load the unpacked extension in your browser: [Install an unpacked extension](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked)
+
+> **Note:** Plan to eventually publish to the Chrome Web Store.
+
 ## CLI
-
-### Installation
-
-```bash
-npm install -g @jacobknightley/fabric-format
-```
 
 ### Usage
 
@@ -42,47 +51,11 @@ fabfmt check --type sparksql -i "select * from t"       # Check inline string
 echo "select * from t" | fabfmt check --type sparksql   # Check from stdin
 ```
 
-### Exit Codes
-
-| Code | Meaning                                          |
-| ---- | ------------------------------------------------ |
-| 0    | Success (format: no changes needed, check: pass) |
-| 1    | Failure (format: error occurred, check: changes needed) |
-| 2    | Usage error (invalid arguments, missing files)   |
-
-## Browser Extension
-
-Format Fabric notebooks directly in your browser with a single click.
-
 ### Installation
 
-1. Download `fabric-format-chromium.zip` from the [latest release](https://github.com/jacobknightley/fabric-format/releases)
-2. Extract the zip file
-3. Load the unpacked extension in your browser:
-   - **Chrome:** [Install an unpacked extension](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked)
-   - **Edge:** [Sideload an extension](https://learn.microsoft.com/en-us/microsoft-edge/extensions-chromium/getting-started/extension-sideloading)
-
-> **Note:** Plan to eventually publish to the Chrome Web Store and Edge Add-ons.
-
-### Browser Compatibility
-
-| Browser | Version | Status |
-| ------- | ------- | ------ |
-| Chrome  | 88+     | ✅ Supported |
-| Edge    | 88+     | ✅ Supported |
-| Firefox | —       | ❌ Not supported (Manifest V3 only) |
-| Safari  | —       | ❌ Not supported |
-
-Requires a Chromium-based browser with Manifest V3 and WASM support.
-
-### Usage
-
-1. Open a notebook in Microsoft Fabric
-2. Click the **Format** button in the notebook toolbar
-
-   ![Format button in Fabric notebook toolbar](assets/extension-format-button.png)
-
-3. All cells in the notebook are formatted instantly
+```bash
+npm install -g @jacobknightley/fabric-format
+```
 
 ## Supported File Types
 
