@@ -2,13 +2,6 @@
 
 A zero-config formatter for **Microsoft Fabric notebooks**.
 
-## Packages
-
-| Package                                      | Description                                |
-| -------------------------------------------- | ------------------------------------------ |
-| [@jacobknightley/fabric-format](./packages/core) | Core formatting library (npm package)      |
-| [fabric-format-chromium](./packages/chromium)    | Chrome/Edge extension for Fabric notebooks |
-
 ## Philosophy
 
 **Opinionated by design.** This formatter has one style, enforced everywhere, with no configuration options—and no plans to add any.
@@ -62,7 +55,7 @@ Format Fabric notebooks directly in your browser with a single click.
 | Safari  | —       | ❌ Not supported |
 
 ### Edge Installation
-1. Install the extension from [Edge Add-ons]([https://github.com/jacobknightley/fabric-format/releases](https://microsoftedge.microsoft.com/addons/detail/fabric-format/pagkopelpfjaedelgckkbmcepekgheaj))
+1. Install the extension from [Edge Add-ons]([https://github.com/jacobknightley/fabric-format/releases](https://microsoftedge.microsoft.com/addons/detail/fabric-format/pagkopelpfjaedelgckkbmcepekgheaj)
 
 ### Chrome Installation
 
