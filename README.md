@@ -54,18 +54,6 @@ echo "select * from t" | fabfmt check --type sparksql   # Check from stdin
 
 Format Fabric notebooks directly in your browser with a single click.
 
-### Installation
-
-1. Download `fabric-format-chromium.zip` from the [latest release](https://github.com/jacobknightley/fabric-format/releases)
-2. Extract the zip file
-3. Load the unpacked extension in your browser:
-   - **Chrome:** [Install an unpacked extension](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked)
-   - **Edge:** [Sideload an extension](https://learn.microsoft.com/en-us/microsoft-edge/extensions-chromium/getting-started/extension-sideloading)
-
-> **Note:** Plan to eventually publish to the Chrome Web Store and Edge Add-ons.
-
-### Browser Compatibility
-
 | Browser | Version | Status |
 | ------- | ------- | ------ |
 | Chrome  | 88+     | ✅ Supported |
@@ -73,7 +61,16 @@ Format Fabric notebooks directly in your browser with a single click.
 | Firefox | —       | ❌ Not supported (Manifest V3 only) |
 | Safari  | —       | ❌ Not supported |
 
-Requires a Chromium-based browser with Manifest V3 and WASM support.
+### Edge Installation
+1. Install the extension from [Edge Add-ons]([https://github.com/jacobknightley/fabric-format/releases](https://microsoftedge.microsoft.com/addons/detail/fabric-format/pagkopelpfjaedelgckkbmcepekgheaj))
+
+### Chrome Installation
+
+1. Download `fabric-format-chromium.zip` from the [latest release](https://github.com/jacobknightley/fabric-format/releases)
+2. Extract the zip file
+3. Load the unpacked extension in your browser: [Install an unpacked extension](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked)
+
+> **Note:** Plan to eventually publish to the Chrome Web Store.
 
 ### Usage
 
