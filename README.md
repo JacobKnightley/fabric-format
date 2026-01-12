@@ -17,9 +17,9 @@ Format Fabric notebooks directly in your browser with a single click.
 ### Usage
 
 1. Open a notebook in Microsoft Fabric
-2. Click the **Format** button in the notebook toolbar
+2. Click the ![Format button in Fabric notebook toolbar](assets/extension-format-button.png) button in the notebook toolbar
 
-   ![Format button in Fabric notebook toolbar](assets/extension-format-button.png)
+   
 
 3. All cells in the notebook are formatted instantly
 
