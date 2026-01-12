@@ -6,6 +6,13 @@
 - Python 3.8+ (for ANTLR build script)
 - Java 11+ (for ANTLR code generation)
 
+## Packages
+
+| Package                                      | Description                                |
+| -------------------------------------------- | ------------------------------------------ |
+| [@jacobknightley/fabric-format](./packages/core) | Core formatting library (npm package)      |
+| [fabric-format-chromium](./packages/chromium)    | Chrome/Edge extension for Fabric notebooks |
+
 ## Repository Structure
 
 This is a monorepo with two packages:
