@@ -13,30 +13,25 @@ The focus is on clean, consistent output—not tailored experiences or nuanced e
 ## Browser Extension
 
 Format Fabric notebooks directly in your browser with a single click.
+   
+   ![ExtensionDemo](https://github.com/user-attachments/assets/30acd57f-0cd3-4edb-a0ae-f7db06ba1de1)
 
-### Usage
+1. Install the Edge extension [Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/fabric-format/pagkopelpfjaedelgckkbmcepekgheaj)
+    > Until Chrome is supported, download the [extension](https://github.com/jacobknightley/fabric-format/releases) and [unpack](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked) in chrome developer mode
+3. Open a notebook in Microsoft Fabric
+4. Click the ![Format button in Fabric notebook toolbar](assets/extension-format-button.png) button in the notebook toolbar
 
-1. Open a notebook in Microsoft Fabric
-2. Click the ![Format button in Fabric notebook toolbar](assets/extension-format-button.png) button in the notebook toolbar
 
-![Demo](assets/extension-demo.mp4)
 
-### Edge Installation
-1. Install the extension from [Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/fabric-format/pagkopelpfjaedelgckkbmcepekgheaj)
-
-### Chrome Installation
-
-1. Download `fabric-format-chromium.zip` from the [latest release](https://github.com/jacobknightley/fabric-format/releases)
-2. Extract the zip file
-3. Load the unpacked extension in your browser: [Install an unpacked extension](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked)
-
-> **Note:** Plan to eventually publish to the Chrome Web Store.
 
 ## CLI
+Format Fabric notebook-content files synced from a workspace in a repository.
 
-### Usage
 
 ```bash
+# install
+npm install -g @jacobknightley/fabric-format
+
 # format
 fabfmt format notebook.py                                # Format a single file
 fabfmt format ./src                                      # Format all files in directory
@@ -51,13 +46,8 @@ fabfmt check --type sparksql -i "select * from t"       # Check inline string
 echo "select * from t" | fabfmt check --type sparksql   # Check from stdin
 ```
 
-### Installation
 
-```bash
-npm install -g @jacobknightley/fabric-format
-```
-
-## Supported File Types
+### Supported File Types
 
 - `.py` — Python notebooks
 - `.scala` — Scala notebooks
@@ -72,8 +62,6 @@ npm install -g @jacobknightley/fabric-format
 > **Note:** All other language cells are preserved as-is.
 
 ### Spark SQL
-
----
 
 Custom formatter built on [Apache Spark's official ANTLR grammar](https://github.com/apache/spark/tree/master/sql/api/src/main/antlr4/org/apache/spark/sql/catalyst/parser). If Spark supports the syntax, fabric-format formats it correctly.
 
@@ -147,8 +135,6 @@ FROM t
 ```
 
 ### Python
-
----
 
 Formatted via [Ruff](https://docs.astral.sh/ruff/) with sensible defaults:
 
