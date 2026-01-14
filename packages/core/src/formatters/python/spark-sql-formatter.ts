@@ -81,7 +81,7 @@ export function formatSparkSqlInPython(code: string): SparkSqlFormatResult {
 
   for (const call of sortedCalls) {
     try {
-      const formattedCall = formatSingleSparkSqlCall(call);
+      const formattedCall = formatSingleSparkSqlCall(call, code);
       if (formattedCall !== call.originalText) {
         formattedCode =
           formattedCode.slice(0, call.callStart) +
@@ -110,10 +110,18 @@ export function formatSparkSqlInPython(code: string): SparkSqlFormatResult {
  * Format a single spark.sql() call.
  *
  * @param call The extracted call information
+ * @param code The full source code (needed for indentation calculation)
  * @returns The formatted spark.sql() call as a string
  */
-function formatSingleSparkSqlCall(call: SparkSqlCall): string {
+function formatSingleSparkSqlCall(call: SparkSqlCall, code: string): string {
   let sql = call.sql;
+
+  // Calculate the base indentation from the line's leading whitespace
+  // This matches the indentation of the statement (e.g., "dfStage = "), not "spark.sql("
+  const lineStart = code.lastIndexOf('\n', call.callStart - 1) + 1;
+  const lineContent = code.slice(lineStart, call.callStart);
+  const leadingWhitespace = lineContent.match(/^(\s*)/)?.[1] ?? '';
+  const baseIndent = leadingWhitespace;
 
   // Handle f-strings: preserve interpolation placeholders
   let placeholderMap: Map<string, string> | undefined;
@@ -171,8 +179,8 @@ function formatSingleSparkSqlCall(call: SparkSqlCall): string {
     }
   }
 
-  // Reconstruct the spark.sql() call
-  return reconstructSparkSqlCall(call, formattedSql);
+  // Reconstruct the spark.sql() call with proper indentation
+  return reconstructSparkSqlCall(call, formattedSql, baseIndent);
 }
 
 /**
@@ -180,11 +188,13 @@ function formatSingleSparkSqlCall(call: SparkSqlCall): string {
  *
  * @param call The original call information
  * @param formattedSql The formatted SQL content
+ * @param baseIndent The base indentation to use for multi-line SQL
  * @returns The complete spark.sql() call string
  */
 function reconstructSparkSqlCall(
   call: SparkSqlCall,
   formattedSql: string,
+  baseIndent: string,
 ): string {
   // Build the string prefix (r, f, rf, etc.)
   let prefix = '';
@@ -196,15 +206,40 @@ function reconstructSparkSqlCall(
     prefix = 'f';
   }
 
+  // Determine quote style: upgrade to triple quotes if SQL has newlines
+  const isMultiLine = formattedSql.includes('\n');
+  const originalIsTriple =
+    call.quoteStyle === '"""' || call.quoteStyle === "'''";
+
+  let quoteStyle = call.quoteStyle;
+  if (isMultiLine && !originalIsTriple) {
+    // Upgrade to triple double quotes for multi-line SQL
+    quoteStyle = '"""';
+  }
+
   // Escape the SQL content for the quote style
   const escapedSql = escapeForQuoteStyle(
     formattedSql,
-    call.quoteStyle,
+    quoteStyle,
     call.isRawString,
   );
 
+  // For multi-line triple-quoted strings, put quotes on separate lines and indent content
+  const useTripleQuoteFormat =
+    isMultiLine && (quoteStyle === '"""' || quoteStyle === "'''");
+
   // Build the complete call
-  let result = `spark.sql(${prefix}${call.quoteStyle}${escapedSql}${call.quoteStyle}`;
+  let result: string;
+  if (useTripleQuoteFormat) {
+    // Indent each line of the SQL to match the spark.sql() call's indentation
+    const indentedSql = escapedSql
+      .split('\n')
+      .map((line) => baseIndent + line)
+      .join('\n');
+    result = `spark.sql(${prefix}${quoteStyle}\n${indentedSql}\n${baseIndent}${quoteStyle}`;
+  } else {
+    result = `spark.sql(${prefix}${quoteStyle}${escapedSql}${quoteStyle}`;
+  }
 
   if (call.formatSuffix) {
     result += call.formatSuffix;
@@ -220,7 +255,7 @@ function reconstructSparkSqlCall(
  *
  * @param sql The SQL content
  * @param quoteStyle The quote style being used
- * @param isRaw Whether this is a raw string
+ * @param isRaw Whether this is a raw string (r"..." or r"""...""")
  * @returns Properly escaped SQL string
  */
 function escapeForQuoteStyle(
@@ -228,30 +263,31 @@ function escapeForQuoteStyle(
   quoteStyle: string,
   isRaw: boolean,
 ): string {
-  // For triple-quoted strings, no escaping needed (except the quote sequence itself)
-  if (quoteStyle === '"""' || quoteStyle === "'''") {
-    // Triple quotes rarely need escaping - just return as-is for now
-    return sql;
-  }
-
-  // For single-quoted strings, need to escape
-  const quoteChar = quoteStyle;
-
+  // Raw strings don't process escape sequences (except for quotes)
   if (isRaw) {
-    // In raw strings, we can't escape quotes with backslash
-    // If the SQL contains the quote character, we have a problem
-    // For now, just return the SQL and hope for the best
+    // In raw strings, backslashes are literal
+    // Only need to handle quotes (which we can't really escape in raw strings)
     return sql;
   }
 
-  // Escape backslashes first, then the quote character
   let escaped = sql;
 
-  // Convert newlines to \n for single-line strings
-  escaped = escaped.replace(/\n/g, '\\n');
+  // Escape backslashes first (before any other escaping)
+  escaped = escaped.replace(/\\/g, '\\\\');
 
-  // Escape the quote character
-  if (quoteChar === '"') {
+  // For triple-quoted strings, newlines can be literal
+  if (quoteStyle === '"""' || quoteStyle === "'''") {
+    // Escape the triple quote sequence if it appears in the SQL
+    if (quoteStyle === '"""') {
+      escaped = escaped.replace(/"""/g, '\\"\\"\\"');
+    } else {
+      escaped = escaped.replace(/'''/g, "\\'\\'\\'");
+    }
+    return escaped;
+  }
+
+  // For single-line strings, escape quotes and convert newlines
+  if (quoteStyle === '"') {
     escaped = escaped.replace(/"/g, '\\"');
   } else {
     escaped = escaped.replace(/'/g, "\\'");

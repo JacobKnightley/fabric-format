@@ -75,10 +75,15 @@ df2 = spark.sql("SELECT b FROM t2")`,
     return spark.sql("SELECT * FROM table")`,
     },
     {
-      // Note: Multi-item SELECT expands to multiple lines
-      name: 'spark.sql with multi-column SELECT expands',
+      // Note: Multi-item SELECT expands to multiple lines, upgrades to triple quotes
+      name: 'spark.sql with multi-column SELECT upgrades to triple quotes',
       input: 'df = spark.sql("select id, name from users")',
-      expected: 'df = spark.sql("SELECT\\n     id\\n    ,name\\nFROM users")',
+      expected: `df = spark.sql("""
+SELECT
+     id
+    ,name
+FROM users
+""")`,
     },
 
     // Whitespace in call
