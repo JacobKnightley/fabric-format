@@ -10,11 +10,14 @@ import type {
   FormatterOptions,
   LanguageFormatter,
 } from '../types.js';
-import { RUFF_WASM_CONFIG } from './config.js';
+import { RUFF_LINT_CONFIG, RUFF_WASM_CONFIG } from './config.js';
 
 // Dynamic import for ruff WASM (loaded on demand)
 let ruffModule: typeof import('@astral-sh/ruff-wasm-web') | null = null;
-let workspace: InstanceType<
+let formatWorkspace: InstanceType<
+  typeof import('@astral-sh/ruff-wasm-web').Workspace
+> | null = null;
+let lintWorkspace: InstanceType<
   typeof import('@astral-sh/ruff-wasm-web').Workspace
 > | null = null;
 
@@ -77,6 +80,126 @@ async function findWasmFileForNode(): Promise<Uint8Array> {
 
   const wasmPath = join(ruffWasmDir, 'ruff_wasm_bg.wasm');
   return readFile(wasmPath);
+}
+
+/**
+ * Ruff diagnostic edit location
+ */
+interface EditLocation {
+  row: number;
+  column: number;
+}
+
+/**
+ * Ruff diagnostic edit
+ */
+interface DiagnosticEdit {
+  location: EditLocation;
+  end_location: EditLocation;
+  content?: string;
+}
+
+/**
+ * Ruff diagnostic with optional fix
+ */
+interface Diagnostic {
+  code: string;
+  message: string;
+  location: EditLocation;
+  end_location: EditLocation;
+  fix?: {
+    message: string;
+    edits: DiagnosticEdit[];
+  };
+}
+
+/**
+ * Apply safe lint auto-fixes to Python code.
+ *
+ * Runs ruff check with SAFE_LINT_RULES and applies any available fixes.
+ * Loops until stable because some fixes (like PLR0402 + I001) interact -
+ * PLR0402 changes import form, I001 re-sorts, which may trigger more fixes.
+ *
+ * @param code - The Python code to lint and fix
+ * @returns The code with fixes applied, or original code if no fixes
+ */
+function applyLintFixes(code: string): string {
+  if (!lintWorkspace) return code;
+
+  const MAX_ITERATIONS = 5; // Safety limit to prevent infinite loops
+  let current = code;
+
+  try {
+    for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+      const diagnostics: Diagnostic[] = lintWorkspace.check(current);
+
+      // Filter to diagnostics that have fixes
+      const fixableDiagnostics = diagnostics.filter(
+        (d) => d.fix && d.fix.edits.length > 0,
+      );
+
+      if (fixableDiagnostics.length === 0) {
+        return current; // No more fixes needed - stable!
+      }
+
+      // Collect all edits from all diagnostics
+      const allEdits: DiagnosticEdit[] = [];
+      for (const diagnostic of fixableDiagnostics) {
+        if (diagnostic.fix) {
+          allEdits.push(...diagnostic.fix.edits);
+        }
+      }
+
+      // Sort edits in reverse order (bottom to top, right to left)
+      // This ensures applying edits doesn't shift positions of subsequent edits
+      allEdits.sort((a, b) => {
+        if (a.location.row !== b.location.row) {
+          return b.location.row - a.location.row; // Bottom first
+        }
+        return b.location.column - a.location.column; // Right first
+      });
+
+      // Apply edits to the code
+      const lines = current.split('\n');
+
+      for (const edit of allEdits) {
+        // Ruff uses 1-indexed rows and columns with Utf32 encoding
+        const startRow = edit.location.row - 1;
+        const startCol = edit.location.column - 1;
+        const endRow = edit.end_location.row - 1;
+        const endCol = edit.end_location.column - 1;
+        const content = edit.content ?? '';
+
+        if (startRow === endRow) {
+          // Single-line edit
+          const line = lines[startRow] ?? '';
+          lines[startRow] =
+            line.slice(0, startCol) + content + line.slice(endCol);
+        } else {
+          // Multi-line edit
+          const startLine = lines[startRow] ?? '';
+          const endLine = lines[endRow] ?? '';
+          const newContent =
+            startLine.slice(0, startCol) + content + endLine.slice(endCol);
+
+          // Replace the affected lines
+          lines.splice(startRow, endRow - startRow + 1, newContent);
+        }
+      }
+
+      // Update current for next iteration
+      current = lines.join('\n');
+
+      // Clean up multiple consecutive blank lines (keep at most 2 for PEP 8)
+      current = current.replace(/\n{3,}/g, '\n\n');
+    }
+
+    // If we hit MAX_ITERATIONS, return what we have
+    return current;
+  } catch {
+    // If linting fails, return original code
+    return code;
+  }
 }
 
 /**
@@ -169,7 +292,7 @@ export class PythonFormatter implements LanguageFormatter {
         await ruffModule.default();
       }
 
-      // Create workspace with config
+      // Create workspaces with config
       // Note: ruff WASM prints debug info to stdout during Workspace creation
       // We suppress this by temporarily replacing stdout.write (Node.js only)
       const hasProcess =
@@ -181,8 +304,14 @@ export class PythonFormatter implements LanguageFormatter {
         process.stdout.write = () => true; // Suppress output
       }
       try {
-        workspace = new ruffModule.Workspace(
+        // Format workspace for code formatting
+        formatWorkspace = new ruffModule.Workspace(
           RUFF_WASM_CONFIG,
+          ruffModule.PositionEncoding.Utf32,
+        );
+        // Lint workspace for safe auto-fixes
+        lintWorkspace = new ruffModule.Workspace(
+          { ...RUFF_WASM_CONFIG, ...RUFF_LINT_CONFIG },
           ruffModule.PositionEncoding.Utf32,
         );
       } finally {
@@ -201,7 +330,7 @@ export class PythonFormatter implements LanguageFormatter {
   }
 
   format(code: string, options?: PythonFormatterOptions): FormatResult {
-    if (!this.isReady() || !workspace) {
+    if (!this.isReady() || !formatWorkspace) {
       return {
         formatted: code,
         changed: false,
@@ -221,13 +350,14 @@ export class PythonFormatter implements LanguageFormatter {
         // Only format Python-based cell magics
         if (magicType === 'pyspark' || magicType === 'python') {
           // Extract the code after the magic line
-          const codeAfterMagic = code.slice(cellMagicMatch[0].length);
+          let codeAfterMagic = code.slice(cellMagicMatch[0].length);
           if (!codeAfterMagic.trim()) {
             return { formatted: code, changed: false };
           }
 
-          // Format the Python code
-          let formatted = workspace.format(codeAfterMagic);
+          // Apply safe lint fixes first, then format
+          codeAfterMagic = applyLintFixes(codeAfterMagic);
+          let formatted = formatWorkspace.format(codeAfterMagic);
 
           // Strip trailing newline if configured
           if (options?.stripTrailingNewline) {
@@ -269,10 +399,11 @@ export class PythonFormatter implements LanguageFormatter {
       }
 
       // Extract Python code to format
-      const pythonCode = lines.slice(pythonStartIndex).join('\n');
+      let pythonCode = lines.slice(pythonStartIndex).join('\n');
 
-      // Format the Python portion
-      let formatted = workspace.format(pythonCode);
+      // Apply safe lint fixes first, then format
+      pythonCode = applyLintFixes(pythonCode);
+      let formatted = formatWorkspace.format(pythonCode);
 
       // Post-processing: Strip trailing newline if configured
       if (options?.stripTrailingNewline) {

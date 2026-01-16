@@ -9,6 +9,7 @@ export {
   initializationTests,
   runInitializationTests,
 } from './initialization.test.js';
+export { lintFixesSuite } from './lint-fixes.test.js';
 export { magicCommandTests } from './magic-commands.test.js';
 export {
   notebookIntegrationTests,
