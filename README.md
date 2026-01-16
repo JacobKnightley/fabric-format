@@ -55,5 +55,34 @@ echo "select * from t" | fabfmt check --type sparksql   # Check from stdin
 - `.sql` — SQL notebooks
 
 
+## Language Support
+
+### Spark SQL
+The SQL formatter uses an ANTLR grammar to parse and reformat Spark SQL. All keywords, functions, and syntax are derived directly from the official Spark SQL grammar.
+
+See [SQL_STYLE_GUIDE.md](SQL_STYLE_GUIDE.md) for formatting rules.
+
+### Python / PySpark
+The Python formatter uses [Ruff](https://github.com/astral-sh/ruff) WASM for:
+
+1. **Code formatting** — Consistent styling (line length 140, double quotes, trailing commas)
+2. **Safe lint auto-fixes** — Automatically applies safe fixes from ~60 Ruff rules
+
+**Included lint auto-fixes:**
+- **Import sorting** (I001) — Organizes imports by standard library, third-party, local
+- **Modernization** (UP008, UP018, UP032) — Updates deprecated patterns to modern Python
+- **Simplifications** (SIM118, SIM201, SIM300) — `key in dict` instead of `key in dict.keys()`, etc.
+- **Bug fixes** (B009, B010) — Use `getattr()`/`setattr()` properly
+- **Style** (E703, E711, F632) — Remove useless semicolons, use `is None`, etc.
+- **Ruff specific** (RUF005) — List concatenation with unpacking
+
+**Explicitly excluded rules** (unsafe for notebooks):
+- **F401, F841** — Unused imports/variables may be used in other cells
+- **Rules that add imports** (RUF017, SIM105, etc.) — Can break cell execution order
+- **RET504** — Removing intermediate variables changes code structure
+
+The lint fixes are applied automatically—no configuration needed.
+
+
 ## Documentation
 Find all documentation at [fabric-format wiki](https://github.com/JacobKnightley/fabric-format/wiki)

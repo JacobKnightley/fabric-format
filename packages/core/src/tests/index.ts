@@ -22,6 +22,7 @@ import {
 // Import Python test suites
 import {
   basicFormattingTests,
+  lintFixesSuite,
   magicCommandTests,
   runInitializationTests,
   runNotebookIntegrationTests,
@@ -154,7 +155,11 @@ const sparkSqlSuites = [
 ];
 
 // Python test suites (sync tests)
-const pythonSyncSuites = [basicFormattingTests, magicCommandTests];
+const pythonSyncSuites = [
+  basicFormattingTests,
+  lintFixesSuite,
+  magicCommandTests,
+];
 
 async function main(): Promise<void> {
   console.log('='.repeat(50));
