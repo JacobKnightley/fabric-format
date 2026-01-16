@@ -117,7 +117,8 @@ interface Diagnostic {
  * Apply safe lint auto-fixes to Python code.
  *
  * Runs ruff check with SAFE_LINT_RULES and applies any available fixes.
- * Edits are applied in reverse order (bottom to top) to preserve line positions.
+ * Loops until stable because some fixes (like PLR0402 + I001) interact -
+ * PLR0402 changes import form, I001 re-sorts, which may trigger more fixes.
  *
  * @param code - The Python code to lint and fix
  * @returns The code with fixes applied, or original code if no fixes
@@ -125,70 +126,76 @@ interface Diagnostic {
 function applyLintFixes(code: string): string {
   if (!lintWorkspace) return code;
 
+  const MAX_ITERATIONS = 5; // Safety limit to prevent infinite loops
+  let current = code;
+
   try {
-    const diagnostics: Diagnostic[] = lintWorkspace.check(code);
+    for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+      const diagnostics: Diagnostic[] = lintWorkspace.check(current);
 
-    // Filter to diagnostics that have fixes
-    const fixableDiagnostics = diagnostics.filter(
-      (d) => d.fix && d.fix.edits.length > 0,
-    );
+      // Filter to diagnostics that have fixes
+      const fixableDiagnostics = diagnostics.filter(
+        (d) => d.fix && d.fix.edits.length > 0,
+      );
 
-    if (fixableDiagnostics.length === 0) {
-      return code;
+      if (fixableDiagnostics.length === 0) {
+        return current; // No more fixes needed - stable!
+      }
+
+      // Collect all edits from all diagnostics
+      const allEdits: DiagnosticEdit[] = [];
+      for (const diagnostic of fixableDiagnostics) {
+        if (diagnostic.fix) {
+          allEdits.push(...diagnostic.fix.edits);
+        }
+      }
+
+      // Sort edits in reverse order (bottom to top, right to left)
+      // This ensures applying edits doesn't shift positions of subsequent edits
+      allEdits.sort((a, b) => {
+        if (a.location.row !== b.location.row) {
+          return b.location.row - a.location.row; // Bottom first
+        }
+        return b.location.column - a.location.column; // Right first
+      });
+
+      // Apply edits to the code
+      const lines = current.split('\n');
+
+      for (const edit of allEdits) {
+        // Ruff uses 1-indexed rows and columns with Utf32 encoding
+        const startRow = edit.location.row - 1;
+        const startCol = edit.location.column - 1;
+        const endRow = edit.end_location.row - 1;
+        const endCol = edit.end_location.column - 1;
+        const content = edit.content ?? '';
+
+        if (startRow === endRow) {
+          // Single-line edit
+          const line = lines[startRow] ?? '';
+          lines[startRow] =
+            line.slice(0, startCol) + content + line.slice(endCol);
+        } else {
+          // Multi-line edit
+          const startLine = lines[startRow] ?? '';
+          const endLine = lines[endRow] ?? '';
+          const newContent =
+            startLine.slice(0, startCol) + content + endLine.slice(endCol);
+
+          // Replace the affected lines
+          lines.splice(startRow, endRow - startRow + 1, newContent);
+        }
+      }
+
+      // Update current for next iteration
+      current = lines.join('\n');
+
+      // Clean up multiple consecutive blank lines (keep at most 2 for PEP 8)
+      current = current.replace(/\n{3,}/g, '\n\n');
     }
 
-    // Collect all edits from all diagnostics
-    const allEdits: DiagnosticEdit[] = [];
-    for (const diagnostic of fixableDiagnostics) {
-      if (diagnostic.fix) {
-        allEdits.push(...diagnostic.fix.edits);
-      }
-    }
-
-    // Sort edits in reverse order (bottom to top, right to left)
-    // This ensures applying edits doesn't shift positions of subsequent edits
-    allEdits.sort((a, b) => {
-      if (a.location.row !== b.location.row) {
-        return b.location.row - a.location.row; // Bottom first
-      }
-      return b.location.column - a.location.column; // Right first
-    });
-
-    // Apply edits to the code
-    const lines = code.split('\n');
-
-    for (const edit of allEdits) {
-      // Ruff uses 1-indexed rows and columns with Utf32 encoding
-      const startRow = edit.location.row - 1;
-      const startCol = edit.location.column - 1;
-      const endRow = edit.end_location.row - 1;
-      const endCol = edit.end_location.column - 1;
-      const content = edit.content ?? '';
-
-      if (startRow === endRow) {
-        // Single-line edit
-        const line = lines[startRow] ?? '';
-        lines[startRow] =
-          line.slice(0, startCol) + content + line.slice(endCol);
-      } else {
-        // Multi-line edit
-        const startLine = lines[startRow] ?? '';
-        const endLine = lines[endRow] ?? '';
-        const newContent =
-          startLine.slice(0, startCol) + content + endLine.slice(endCol);
-
-        // Replace the affected lines
-        lines.splice(startRow, endRow - startRow + 1, newContent);
-      }
-    }
-
-    // Remove empty lines that result from deletions (consecutive empty lines → single)
-    let result = lines.join('\n');
-
-    // Clean up multiple consecutive blank lines (keep at most 2 for PEP 8)
-    result = result.replace(/\n{3,}/g, '\n\n');
-
-    return result;
+    // If we hit MAX_ITERATIONS, return what we have
+    return current;
   } catch {
     // If linting fails, return original code
     return code;
