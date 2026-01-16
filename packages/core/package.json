@@ -1,6 +1,6 @@
 {
   "name": "@jacobknightley/fabric-format",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "type": "module",
   "description": "A fast, opinionated formatter for Microsoft Fabric notebooks with Spark SQL and Python support",
   "main": "dist/index.js",
