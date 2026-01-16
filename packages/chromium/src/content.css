@@ -36,6 +36,21 @@
   color: #881798;
 }
 
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  #fabric-formatter-button {
+    color: #e0e0e0;
+  }
+
+  #fabric-formatter-button:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+  }
+
+  #fabric-formatter-button .fui-Button__icon {
+    color: #d8b4fe;
+  }
+}
+
 /* ============================================================================
    Overlay
    ============================================================================ */
