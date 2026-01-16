@@ -21,9 +21,11 @@ import {
 } from './integration/index.js';
 // Import Python test suites
 import {
+  allSparkSqlInPythonTests,
   basicFormattingTests,
   lintFixesSuite,
   magicCommandTests,
+  regressionBugTests,
   runInitializationTests,
   runNotebookIntegrationTests,
 } from './python/index.js';
@@ -159,6 +161,8 @@ const pythonSyncSuites = [
   basicFormattingTests,
   lintFixesSuite,
   magicCommandTests,
+  regressionBugTests,
+  ...allSparkSqlInPythonTests,
 ];
 
 async function main(): Promise<void> {

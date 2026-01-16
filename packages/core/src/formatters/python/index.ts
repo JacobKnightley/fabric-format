@@ -27,3 +27,21 @@ export {
   type RuffConfig,
   type RuffFormatConfig,
 } from './config.js';
+
+// ============================================================================
+// SPARK SQL IN PYTHON
+// ============================================================================
+
+export {
+  type ExtractionResult,
+  extractSparkSqlCalls,
+  findFStringInterpolations,
+  hasFormatPlaceholders,
+  type SparkSqlCall,
+} from './spark-sql-extractor.js';
+
+export {
+  formatSparkSqlInPython,
+  recommendQuoteStyle,
+  type SparkSqlFormatResult,
+} from './spark-sql-formatter.js';
