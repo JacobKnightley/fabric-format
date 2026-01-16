@@ -229,7 +229,7 @@ function reconstructSparkSqlCall(
     isMultiLine && (quoteStyle === '"""' || quoteStyle === "'''");
 
   // SQL content should be indented one level (4 spaces) from the Python code
-  const sqlIndent = baseIndent + '    ';
+  const sqlIndent = `${baseIndent}    `;
 
   // Build the complete call
   let result: string;
