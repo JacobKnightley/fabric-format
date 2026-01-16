@@ -106,7 +106,10 @@ interface DiagnosticEdit {
 interface Diagnostic {
   code: string;
   message: string;
-  location: EditLocation;
+  // Note: Ruff returns both 'location'/'end_location' AND 'start_location'/'end_location'
+  // depending on the version. We support both.
+  location?: EditLocation;
+  start_location?: EditLocation;
   end_location: EditLocation;
   fix?: {
     message: string;
@@ -143,77 +146,99 @@ function applyLintFixes(code: string): string {
         return current; // No more fixes needed - stable!
       }
 
-      // Collect all edits from all diagnostics
-      const allEdits: DiagnosticEdit[] = [];
-      for (const diagnostic of fixableDiagnostics) {
-        if (diagnostic.fix) {
-          allEdits.push(...diagnostic.fix.edits);
+      // Sort diagnostics by their start position (bottom to top) so we can
+      // apply fixes without position shifts affecting later edits.
+      // Use the diagnostic's location, not individual edit locations.
+      fixableDiagnostics.sort((a, b) => {
+        const aLoc = a.start_location ?? a.location ?? { row: 0, column: 0 };
+        const bLoc = b.start_location ?? b.location ?? { row: 0, column: 0 };
+        if (aLoc.row !== bLoc.row) {
+          return bLoc.row - aLoc.row; // Bottom first
         }
-      }
-
-      // Sort edits in reverse order (bottom to top, right to left)
-      // This ensures applying edits doesn't shift positions of subsequent edits
-      allEdits.sort((a, b) => {
-        if (a.location.row !== b.location.row) {
-          return b.location.row - a.location.row; // Bottom first
-        }
-        return b.location.column - a.location.column; // Right first
+        return bLoc.column - aLoc.column; // Right first
       });
 
-      // Dedupe overlapping edits - when multiple diagnostics fix the same range,
-      // only apply the first one (which after sorting is the "last" in document order)
-      const deduped: DiagnosticEdit[] = [];
-      let lastEditEnd: { row: number; col: number } | null = null;
+      // Track which ranges have been modified to avoid overlapping fixes
+      // from different diagnostics
+      const modifiedRanges: Array<{
+        startRow: number;
+        startCol: number;
+        endRow: number;
+        endCol: number;
+      }> = [];
 
-      for (const edit of allEdits) {
-        const startRow = edit.location.row - 1;
-        const startCol = edit.location.column - 1;
-        const endRow = edit.end_location.row - 1;
-        const endCol = edit.end_location.column - 1;
+      // Apply each diagnostic's edits atomically (all edits from one diagnostic together)
+      const lines = current.split('\n');
 
-        // Check if this edit overlaps with the previous one
-        // Since we're sorted reverse, "overlaps" means this edit ends at or after
-        // where the previous edit started
-        if (lastEditEnd !== null) {
-          const overlaps =
-            endRow > lastEditEnd.row ||
-            (endRow === lastEditEnd.row && endCol > lastEditEnd.col);
-          if (overlaps) {
-            // Skip this edit - it overlaps with one we're already applying
-            continue;
+      for (const diagnostic of fixableDiagnostics) {
+        if (!diagnostic.fix) continue;
+
+        // Check if this diagnostic overlaps with any already-applied fix
+        const diagLoc = diagnostic.start_location ??
+          diagnostic.location ?? { row: 1, column: 1 };
+        const diagStartRow = diagLoc.row - 1;
+        const diagStartCol = diagLoc.column - 1;
+        const diagEndRow = diagnostic.end_location.row - 1;
+        const diagEndCol = diagnostic.end_location.column - 1;
+
+        const overlapsWithModified = modifiedRanges.some((range) => {
+          // Check if diagnostic range overlaps with modified range
+          // Two ranges overlap if neither is completely before or after the other
+          const diagBeforeRange =
+            diagEndRow < range.startRow ||
+            (diagEndRow === range.startRow && diagEndCol <= range.startCol);
+          const diagAfterRange =
+            diagStartRow > range.endRow ||
+            (diagStartRow === range.endRow && diagStartCol >= range.endCol);
+          return !diagBeforeRange && !diagAfterRange;
+        });
+
+        if (overlapsWithModified) {
+          // Skip this diagnostic - it overlaps with a fix we already applied
+          continue;
+        }
+
+        // Sort this diagnostic's edits in reverse order (bottom to top)
+        // so applying them doesn't shift positions of earlier edits
+        const edits = [...diagnostic.fix.edits].sort((a, b) => {
+          if (a.location.row !== b.location.row) {
+            return b.location.row - a.location.row;
+          }
+          return b.location.column - a.location.column;
+        });
+
+        // Apply all edits from this diagnostic
+        for (const edit of edits) {
+          const startRow = edit.location.row - 1;
+          const startCol = edit.location.column - 1;
+          const endRow = edit.end_location.row - 1;
+          const endCol = edit.end_location.column - 1;
+          const content = edit.content ?? '';
+
+          if (startRow === endRow) {
+            // Single-line edit
+            const line = lines[startRow] ?? '';
+            lines[startRow] =
+              line.slice(0, startCol) + content + line.slice(endCol);
+          } else {
+            // Multi-line edit
+            const startLine = lines[startRow] ?? '';
+            const endLine = lines[endRow] ?? '';
+            const newContent =
+              startLine.slice(0, startCol) + content + endLine.slice(endCol);
+
+            // Replace the affected lines
+            lines.splice(startRow, endRow - startRow + 1, newContent);
           }
         }
 
-        deduped.push(edit);
-        lastEditEnd = { row: startRow, col: startCol };
-      }
-
-      // Apply edits to the code
-      const lines = current.split('\n');
-
-      for (const edit of deduped) {
-        // Ruff uses 1-indexed rows and columns with Utf32 encoding
-        const startRow = edit.location.row - 1;
-        const startCol = edit.location.column - 1;
-        const endRow = edit.end_location.row - 1;
-        const endCol = edit.end_location.column - 1;
-        const content = edit.content ?? '';
-
-        if (startRow === endRow) {
-          // Single-line edit
-          const line = lines[startRow] ?? '';
-          lines[startRow] =
-            line.slice(0, startCol) + content + line.slice(endCol);
-        } else {
-          // Multi-line edit
-          const startLine = lines[startRow] ?? '';
-          const endLine = lines[endRow] ?? '';
-          const newContent =
-            startLine.slice(0, startCol) + content + endLine.slice(endCol);
-
-          // Replace the affected lines
-          lines.splice(startRow, endRow - startRow + 1, newContent);
-        }
+        // Track the modified range
+        modifiedRanges.push({
+          startRow: diagStartRow,
+          startCol: diagStartCol,
+          endRow: diagEndRow,
+          endCol: diagEndCol,
+        });
       }
 
       // Update current for next iteration

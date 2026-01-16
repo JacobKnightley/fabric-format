@@ -25,6 +25,7 @@ import {
   basicFormattingTests,
   lintFixesSuite,
   magicCommandTests,
+  regressionBugTests,
   runInitializationTests,
   runNotebookIntegrationTests,
 } from './python/index.js';
@@ -160,6 +161,7 @@ const pythonSyncSuites = [
   basicFormattingTests,
   lintFixesSuite,
   magicCommandTests,
+  regressionBugTests,
   ...allSparkSqlInPythonTests,
 ];
 
