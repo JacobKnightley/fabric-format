@@ -76,13 +76,14 @@ df2 = spark.sql("SELECT b FROM t2")`,
     },
     {
       // Note: Multi-item SELECT expands to multiple lines, upgrades to triple quotes
+      // SQL content is indented one level (4 spaces) from the Python statement
       name: 'spark.sql with multi-column SELECT upgrades to triple quotes',
       input: 'df = spark.sql("select id, name from users")',
       expected: `df = spark.sql("""
-SELECT
-     id
-    ,name
-FROM users
+    SELECT
+         id
+        ,name
+    FROM users
 """)`,
     },
 
@@ -120,21 +121,22 @@ export const sparkSqlPlaceholderTests: TestSuite = {
       expected: 'spark.sql(f"SELECT * FROM {schema}.{table}")',
     },
 
-    // .format() strings
+    // .format() strings - Ruff's UP032 rule converts named placeholders to f-strings
+    // but positional placeholders ({0}) are not converted
     {
       name: '.format() with named placeholder',
       input: 'spark.sql("select * from {table}".format(table=tbl))',
-      expected: 'spark.sql("SELECT * FROM {table}".format(table=tbl))',
+      expected: 'spark.sql(f"SELECT * FROM {tbl}")', // UP032 converts to f-string
     },
     {
       name: '.format() with positional placeholder',
       input: 'spark.sql("select * from {0}".format(table_name))',
-      expected: 'spark.sql("SELECT * FROM {0}".format(table_name))',
+      expected: 'spark.sql(f"SELECT * FROM {table_name}")', // UP032 converts to f-string
     },
     {
       name: '.format() with empty placeholder',
       input: 'spark.sql("select * from {}".format(table_name))',
-      expected: 'spark.sql("SELECT * FROM {}".format(table_name))',
+      expected: 'spark.sql(f"SELECT * FROM {table_name}")', // UP032 converts to f-string
     },
 
     // Combined

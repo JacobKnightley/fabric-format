@@ -228,13 +228,16 @@ function reconstructSparkSqlCall(
   const useTripleQuoteFormat =
     isMultiLine && (quoteStyle === '"""' || quoteStyle === "'''");
 
+  // SQL content should be indented one level (4 spaces) from the Python code
+  const sqlIndent = baseIndent + '    ';
+
   // Build the complete call
   let result: string;
   if (useTripleQuoteFormat) {
-    // Indent each line of the SQL to match the spark.sql() call's indentation
+    // Indent each line of the SQL one level deeper than the Python statement
     const indentedSql = escapedSql
       .split('\n')
-      .map((line) => baseIndent + line)
+      .map((line) => sqlIndent + line)
       .join('\n');
     result = `spark.sql(${prefix}${quoteStyle}\n${indentedSql}\n${baseIndent}${quoteStyle}`;
   } else {

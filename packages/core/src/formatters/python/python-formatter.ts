@@ -160,10 +160,38 @@ function applyLintFixes(code: string): string {
         return b.location.column - a.location.column; // Right first
       });
 
+      // Dedupe overlapping edits - when multiple diagnostics fix the same range,
+      // only apply the first one (which after sorting is the "last" in document order)
+      const deduped: DiagnosticEdit[] = [];
+      let lastEditEnd: { row: number; col: number } | null = null;
+
+      for (const edit of allEdits) {
+        const startRow = edit.location.row - 1;
+        const startCol = edit.location.column - 1;
+        const endRow = edit.end_location.row - 1;
+        const endCol = edit.end_location.column - 1;
+
+        // Check if this edit overlaps with the previous one
+        // Since we're sorted reverse, "overlaps" means this edit ends at or after
+        // where the previous edit started
+        if (lastEditEnd !== null) {
+          const overlaps =
+            endRow > lastEditEnd.row ||
+            (endRow === lastEditEnd.row && endCol > lastEditEnd.col);
+          if (overlaps) {
+            // Skip this edit - it overlaps with one we're already applying
+            continue;
+          }
+        }
+
+        deduped.push(edit);
+        lastEditEnd = { row: startRow, col: startCol };
+      }
+
       // Apply edits to the code
       const lines = current.split('\n');
 
-      for (const edit of allEdits) {
+      for (const edit of deduped) {
         // Ruff uses 1-indexed rows and columns with Utf32 encoding
         const startRow = edit.location.row - 1;
         const startCol = edit.location.column - 1;
