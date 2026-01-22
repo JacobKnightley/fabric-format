@@ -154,6 +154,45 @@ spark.sql(f"SELECT {col} FROM {tbl}")`,
 };
 
 /**
+ * PySpark boolean comparison transformation bug
+ *
+ * The formatter was incorrectly transforming `!= True` to `not` which doesn't
+ * work with PySpark Column objects. PySpark Column objects need explicit
+ * comparison operators (==, !=) rather than Python's logical operators.
+ */
+export const pysparkBooleanComparisonTests: TestSuite = {
+  name: 'Regression: PySpark Boolean Comparison (SIM202)',
+  tests: [
+    {
+      name: 'PySpark: != True should NOT be transformed to not',
+      // PySpark Column objects must use != True, not `not` operator
+      input: `final_df = (
+    final_df.withColumn("Specification", F.lit(""))
+    .withColumn("OtherSpecification", F.lit(""))
+    .withColumn("Status", F.lit(""))
+    .filter(F.col("Active") != True)
+)`,
+      expected: `final_df = (
+    final_df.withColumn("Specification", F.lit(""))
+    .withColumn("OtherSpecification", F.lit(""))
+    .withColumn("Status", F.lit(""))
+    .filter(F.col("Active") != True)
+)`,
+    },
+    {
+      name: 'PySpark: == False should NOT be transformed to not',
+      input: `df.filter(F.col("status") == False)`,
+      expected: `df.filter(F.col("status") == False)`,
+    },
+    {
+      name: 'PySpark: != False should be preserved',
+      input: `df.filter(F.col("status") != False)`,
+      expected: `df.filter(F.col("status") != False)`,
+    },
+  ],
+};
+
+/**
  * Combined regression test suite for export
  */
 export const regressionBugTests: TestSuite = {
@@ -161,5 +200,6 @@ export const regressionBugTests: TestSuite = {
   tests: [
     ...commentDuplicationBugTests.tests,
     ...overlappingEditsBugTests.tests,
+    ...pysparkBooleanComparisonTests.tests,
   ],
 };

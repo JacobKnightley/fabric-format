@@ -107,10 +107,14 @@ export const SAFE_LINT_RULES: string[] = [
   'SIM117', // multiple-with-statements
   'SIM118', // in-dict-keys
   'SIM201', // negate-equal-op
-  'SIM202', // negate-not-equal-op
+  // NOTE: SIM202 (negate-not-equal-op) is excluded because it transforms
+  // `x != True` to `not x` and `x == False` to `not x`, which doesn't work
+  // with PySpark Column objects that need explicit comparison operators.
   'SIM208', // double-negation
-  'SIM210', // if-expr-with-true-false
-  'SIM211', // if-expr-with-false-true
+  // NOTE: SIM210/SIM211 (if-expr-with-true/false-true) are excluded for similar
+  // reasons - they may transform boolean comparisons in ways incompatible with PySpark.
+  // 'SIM210', // if-expr-with-true-false
+  // 'SIM211', // if-expr-with-false-true
   'SIM212', // if-expr-with-twisted-arms
   'SIM220', // expr-and-not-expr
   'SIM221', // expr-or-not-expr
@@ -131,7 +135,10 @@ export const SAFE_LINT_RULES: string[] = [
   'E401', // multiple-imports-on-one-line
   'E703', // useless-semicolon
   'E711', // none-comparison
-  'E712', // true-false-comparison
+  // NOTE: E712 (true-false-comparison) is excluded because even though it's
+  // documented as not having a fix, it may interact with other rules or
+  // Ruff's formatter to cause unwanted transformations with PySpark.
+  // 'E712', // true-false-comparison
   'E713', // not-in-test
   'E714', // not-is-test
 
