@@ -59,8 +59,16 @@ export const RUFF_WASM_CONFIG = {
  *   These would incorrectly flag code that's used in other cells.
  * - Import-adding rules (RUF017, SIM105, PLR1722, PTH*)
  *   These would add imports without knowing if they're already imported elsewhere.
+ * - PySpark incompatible rules (E712 true-false-comparison)
+ *   E712 transforms Column boolean comparisons (e.g., `col != True` -> `not col`)
+ *   which breaks PySpark's operator overloading. See regression tests for details.
  *
  * All included rules perform in-cell syntactic transformations only.
+ *
+ * PySpark Compatibility Note:
+ * Other rules like SIM210/211 (bool() coercion) and SIM220/221 (logical simplification)
+ * theoretically could affect Column objects, but either don't have auto-fixes or don't
+ * trigger on PySpark patterns in practice. E712 is the only rule known to cause issues.
  */
 export const SAFE_LINT_RULES: string[] = [
   // I - isort (import sorting within cell)
