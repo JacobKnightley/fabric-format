@@ -59,8 +59,16 @@ export const RUFF_WASM_CONFIG = {
  *   These would incorrectly flag code that's used in other cells.
  * - Import-adding rules (RUF017, SIM105, PLR1722, PTH*)
  *   These would add imports without knowing if they're already imported elsewhere.
+ * - PySpark incompatible rules (E712 true-false-comparison)
+ *   E712 transforms Column boolean comparisons (e.g., `col != True` -> `not col`)
+ *   which breaks PySpark's operator overloading. See regression tests for details.
  *
  * All included rules perform in-cell syntactic transformations only.
+ *
+ * PySpark Compatibility Note:
+ * Other rules like SIM210/211 (bool() coercion) and SIM220/221 (logical simplification)
+ * theoretically could affect Column objects, but either don't have auto-fixes or don't
+ * trigger on PySpark patterns in practice. E712 is the only rule known to cause issues.
  */
 export const SAFE_LINT_RULES: string[] = [
   // I - isort (import sorting within cell)
@@ -131,7 +139,11 @@ export const SAFE_LINT_RULES: string[] = [
   'E401', // multiple-imports-on-one-line
   'E703', // useless-semicolon
   'E711', // none-comparison
-  'E712', // true-false-comparison
+  // NOTE: E712 (true-false-comparison) excluded - causes PySpark incompatibility.
+  // Transforms `F.col("Active") != True` to `not F.col("Active")` and
+  // `F.col("status") == False` to `not F.col("status")`, which doesn't work
+  // with PySpark Column objects that require explicit comparison operators.
+  // See regression tests in tests/python/regression-bugs.test.ts
   'E713', // not-in-test
   'E714', // not-is-test
 

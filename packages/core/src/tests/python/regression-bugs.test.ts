@@ -154,6 +154,55 @@ spark.sql(f"SELECT {col} FROM {tbl}")`,
 };
 
 /**
+ * PySpark boolean comparison transformation bug
+ *
+ * The E712 lint rule (true-false-comparison) was transforming boolean
+ * comparisons in ways that break PySpark Column objects:
+ * - `x != True` → `not x`
+ * - `x == False` → `not x`
+ * - `x != False` → `x` (removes comparison entirely)
+ *
+ * PySpark Column objects override comparison operators to return Column
+ * expressions for Spark to evaluate. Python's `not` operator doesn't work
+ * the same way - it tries to evaluate the Column object as a boolean,
+ * which fails.
+ *
+ * Solution: Excluded E712 from SAFE_LINT_RULES to preserve explicit
+ * boolean comparisons needed for PySpark.
+ */
+export const pysparkBooleanComparisonTests: TestSuite = {
+  name: 'Regression: PySpark Boolean Comparison (E712)',
+  tests: [
+    {
+      name: 'PySpark: != True should NOT be transformed to not',
+      // PySpark Column objects must use != True, not `not` operator
+      input: `final_df = (
+    final_df.withColumn("Specification", F.lit(""))
+    .withColumn("OtherSpecification", F.lit(""))
+    .withColumn("Status", F.lit(""))
+    .filter(F.col("Active") != True)
+)`,
+      expected: `final_df = (
+    final_df.withColumn("Specification", F.lit(""))
+    .withColumn("OtherSpecification", F.lit(""))
+    .withColumn("Status", F.lit(""))
+    .filter(F.col("Active") != True)
+)`,
+    },
+    {
+      name: 'PySpark: == False should NOT be transformed to not',
+      input: `df.filter(F.col("status") == False)`,
+      expected: `df.filter(F.col("status") == False)`,
+    },
+    {
+      name: 'PySpark: != False should be preserved',
+      input: `df.filter(F.col("status") != False)`,
+      expected: `df.filter(F.col("status") != False)`,
+    },
+  ],
+};
+
+/**
  * Combined regression test suite for export
  */
 export const regressionBugTests: TestSuite = {
@@ -161,5 +210,6 @@ export const regressionBugTests: TestSuite = {
   tests: [
     ...commentDuplicationBugTests.tests,
     ...overlappingEditsBugTests.tests,
+    ...pysparkBooleanComparisonTests.tests,
   ],
 };
