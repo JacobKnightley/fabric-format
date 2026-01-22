@@ -156,12 +156,22 @@ spark.sql(f"SELECT {col} FROM {tbl}")`,
 /**
  * PySpark boolean comparison transformation bug
  *
- * The formatter was incorrectly transforming `!= True` to `not` which doesn't
- * work with PySpark Column objects. PySpark Column objects need explicit
- * comparison operators (==, !=) rather than Python's logical operators.
+ * The E712 lint rule (true-false-comparison) was transforming boolean
+ * comparisons in ways that break PySpark Column objects:
+ * - `x != True` → `not x`
+ * - `x == False` → `not x`
+ * - `x != False` → `x` (removes comparison entirely)
+ *
+ * PySpark Column objects override comparison operators to return Column
+ * expressions for Spark to evaluate. Python's `not` operator doesn't work
+ * the same way - it tries to evaluate the Column object as a boolean,
+ * which fails.
+ *
+ * Solution: Excluded E712 from SAFE_LINT_RULES to preserve explicit
+ * boolean comparisons needed for PySpark.
  */
 export const pysparkBooleanComparisonTests: TestSuite = {
-  name: 'Regression: PySpark Boolean Comparison (SIM202)',
+  name: 'Regression: PySpark Boolean Comparison (E712)',
   tests: [
     {
       name: 'PySpark: != True should NOT be transformed to not',

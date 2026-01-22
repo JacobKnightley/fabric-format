@@ -107,14 +107,10 @@ export const SAFE_LINT_RULES: string[] = [
   'SIM117', // multiple-with-statements
   'SIM118', // in-dict-keys
   'SIM201', // negate-equal-op
-  // NOTE: SIM202 (negate-not-equal-op) is excluded because it transforms
-  // `x != True` to `not x` and `x == False` to `not x`, which doesn't work
-  // with PySpark Column objects that need explicit comparison operators.
+  'SIM202', // negate-not-equal-op
   'SIM208', // double-negation
-  // NOTE: SIM210/SIM211 (if-expr-with-true/false-true) are excluded for similar
-  // reasons - they may transform boolean comparisons in ways incompatible with PySpark.
-  // 'SIM210', // if-expr-with-true-false
-  // 'SIM211', // if-expr-with-false-true
+  'SIM210', // if-expr-with-true-false
+  'SIM211', // if-expr-with-false-true
   'SIM212', // if-expr-with-twisted-arms
   'SIM220', // expr-and-not-expr
   'SIM221', // expr-or-not-expr
@@ -135,10 +131,11 @@ export const SAFE_LINT_RULES: string[] = [
   'E401', // multiple-imports-on-one-line
   'E703', // useless-semicolon
   'E711', // none-comparison
-  // NOTE: E712 (true-false-comparison) is excluded because even though it's
-  // documented as not having a fix, it may interact with other rules or
-  // Ruff's formatter to cause unwanted transformations with PySpark.
-  // 'E712', // true-false-comparison
+  // NOTE: E712 (true-false-comparison) excluded - causes PySpark incompatibility.
+  // Transforms `F.col("Active") != True` to `not F.col("Active")` and
+  // `F.col("status") == False` to `not F.col("status")`, which doesn't work
+  // with PySpark Column objects that require explicit comparison operators.
+  // See regression tests in tests/python/regression-bugs.test.ts
   'E713', // not-in-test
   'E714', // not-is-test
 
